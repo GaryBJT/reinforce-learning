@@ -1614,7 +1614,7 @@ RoutingProtocol::RecvQoar(Ptr<Socket> socket)
     {
         NS_ASSERT_MSG(false, "Received a packet from an unknown socket");
     }
-    NS_LOG_DEBUG("QOAR node " << this << " received a QOAR packet from " << sender << " to "
+    NS_LOG_DEBUG("myQOAR node " << this << " received a QOAR packet from " << sender << " to "
                               << receiver);
 
     UpdateRouteToNeighbor(sender, receiver);
