@@ -27,7 +27,7 @@
 #define NS_LOG_APPEND_CONTEXT                                                                      \
     if (m_ipv4)                                                                                    \
     {                                                                                              \
-        std::clog << "[node " << m_ipv4->GetObject<Node>()->GetId() << "] ";                       \
+        std::clog << "[mynode " << m_ipv4->GetObject<Node>()->GetId() << "] ";                       \
     }
 
 #include "qoar-routing-protocol.h"
