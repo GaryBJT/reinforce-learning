@@ -1622,7 +1622,7 @@ RoutingProtocol::RecvQoar(Ptr<Socket> socket)
     packet->RemoveHeader(tHeader);
     if (!tHeader.IsValid())
     {
-        NS_LOG_DEBUG("QOAR message " << packet->GetUid() << " with unknown type received: "
+        NS_LOG_DEBUG("myQOAR message " << packet->GetUid() << " with unknown type received: "
                                      << tHeader.Get() << ". Drop");
         return; // drop
     }
