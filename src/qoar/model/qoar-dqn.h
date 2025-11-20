@@ -42,6 +42,7 @@ class DQN {
 
       // === 导入 MAPPO 模块（替代原 qoar_dqn） ===
       pModule = PyImport_ImportModule("qoar_dqn");
+      // pModule = PyImport_ImportModule("qoar_lstm");
       if (!pModule) {
         std::cerr << "无法导入MAPPO模块 'qoar_dqn'" << std::endl;
         PyErr_Print();

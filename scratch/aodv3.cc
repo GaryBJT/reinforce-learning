@@ -634,7 +634,7 @@ main(int argc, char* argv[])
     YansWifiChannelHelper chAC = YansWifiChannelHelper::Default ();
     YansWifiPhyHelper     phyAC;
     phyAC.SetChannel (chAC.Create ());
-    phyAC.Set ("ChannelSettings", StringValue ("{58, 80, BAND_5GHZ, 0}"));
+    // phyAC.Set ("ChannelSettings", StringValue ("{58, 80, BAND_5GHZ, 0}"));
     phyAC.Set ("TxPowerStart", DoubleValue (txPower));
     phyAC.Set ("TxPowerEnd",   DoubleValue (txPower));
     phyAC.Set ("TxPowerLevels", UintegerValue (1));

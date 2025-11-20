@@ -4,6 +4,7 @@
 # - set_mappo_params / set_qlearning_params 支持缺参(含缺 c)且静默
 # - 默认静默；将环境变量 QOAR_VERBOSE=1 可开启日志
 
+
 import os
 import numbers
 import numpy as np
@@ -13,9 +14,19 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+from torch.distributions.categorical import Categorical
 from datetime import datetime
-
-
+# import argparse
+# from distutils.util import strtobool
+# import gym
+# # from torch.utils.tensorboard import SummaryWriter
+# from stable_baselines3.common.atari_wrappers import (  # isort:skip
+#     ClipRewardEnv,
+#     EpisodicLifeEnv,
+#     FireResetEnv,
+#     MaxAndSkipEnv,
+#     NoopResetEnv,
+# )
 __all__ = [
     "MAPPOQoAR",
     "qlearning",
@@ -37,106 +48,193 @@ except Exception:
 
 # ====== 小型 MLP ======
 class MLP(nn.Module):
-    # 初始化输入层和隐藏层(2)
     def __init__(self, in_dim, hidden=(128, 128), out_dim=None):
         super().__init__()
         dims = [in_dim] + list(hidden)
         self.layers = nn.ModuleList([nn.Linear(dims[i], dims[i + 1]) for i in range(len(dims) - 1)])
         self.out = nn.Linear(dims[-1], out_dim) if out_dim is not None else None
-    # 前向传播
+
     def forward(self, x):
         for l in self.layers:
             x = F.relu(l(x))
         return self.out(x) if self.out is not None else x
 
 
-# ====== MAPPO：Actor / Critic ======
-class Actor(nn.Module):
-    def __init__(self, obs_dim, act_dim, hidden=(128, 128)):
+# ====== Actor / Critic with LSTM ======
+class ActorLSTM(nn.Module):
+    def __init__(self, obs_dim, act_dim, hidden=(128,), lstm_hidden=128, lstm_layers=1):
+        """
+        obs_dim -> MLP encoder -> LSTM -> policy head
+        """
         super().__init__()
-        # 调用神经网络MLP
-        self.net = MLP(obs_dim, hidden, act_dim)
-        # 局部观测
-    def forward(self, obs):
-        logits = self.net(obs)  # [B, act_dim] 输出原始分数
-        return logits
+        # encoder MLP (produce features)
+        self.encoder = MLP(obs_dim, hidden, out_dim=lstm_hidden)
+        self.lstm = nn.LSTM(lstm_hidden, lstm_hidden, num_layers=lstm_layers, batch_first=True)
+        self.policy = nn.Linear(lstm_hidden, act_dim)
+
+        # init weights
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                nn.init.zeros_(m.bias)
+
+    def forward(self, x, hx=None):
+        """
+        x: [B, obs_dim] (single-step); we will expand to [B, 1, feat] for LSTM
+        hx: tuple (h, c) where each is [num_layers, B, lstm_hidden]
+        returns: logits [B, act_dim], new_hx (h,c)
+        """
+        feat = self.encoder(x)  # [B, lstm_hidden]
+        feat = feat.unsqueeze(1)  # [B, 1, lstm_hidden]
+        if hx is None:
+            # create zeros
+            device = x.device
+            num_layers = self.lstm.num_layers
+            hidden_size = self.lstm.hidden_size
+            h0 = torch.zeros(num_layers, x.size(0), hidden_size, device=device)
+            c0 = torch.zeros(num_layers, x.size(0), hidden_size, device=device)
+            hx = (h0, c0)
+        out, (hn, cn) = self.lstm(feat, hx)  # out: [B, 1, hidden]
+        out = out.squeeze(1)  # [B, hidden]
+        logits = self.policy(out)
+        return logits, (hn, cn)
 
 
-class Critic(nn.Module):
-    def __init__(self, gobs_dim, hidden=(128, 128)):
+class CriticLSTM(nn.Module):
+    def __init__(self, gobs_dim, hidden=(128,), lstm_hidden=128, lstm_layers=1):
+        """
+        gobs_dim -> MLP encoder -> LSTM -> value head
+        """
         super().__init__()
-        # 调用神经网络MLP
-        self.v = MLP(gobs_dim, hidden, 1)
-        # 全局观测 
-    def forward(self, gobs):
-        return self.v(gobs).squeeze(-1)  # [B] 去除最后一个维度
+        self.encoder = MLP(gobs_dim, hidden, out_dim=lstm_hidden)
+        self.lstm = nn.LSTM(lstm_hidden, lstm_hidden, num_layers=lstm_layers, batch_first=True)
+        self.value_head = nn.Linear(lstm_hidden, 1)
 
+        # init
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                nn.init.zeros_(m.bias)
 
-# ====== On-policy 缓冲（GAE）======
+    def forward(self, x, hx=None):
+        """
+        x: [B, gobs_dim] single-step
+        hx: (h,c) each [num_layers, B, hidden]
+        returns: value [B], new_hx
+        """
+        feat = self.encoder(x).unsqueeze(1)  # [B,1,hidden]
+        if hx is None:
+            device = x.device
+            num_layers = self.lstm.num_layers
+            hidden_size = self.lstm.hidden_size
+            h0 = torch.zeros(num_layers, x.size(0), hidden_size, device=device)
+            c0 = torch.zeros(num_layers, x.size(0), hidden_size, device=device)
+            hx = (h0, c0)
+        out, (hn, cn) = self.lstm(feat, hx)
+        out = out.squeeze(1)
+        val = self.value_head(out).squeeze(-1)
+        return val, (hn, cn)
+
+# ====== On-policy 缓冲（GAE），增加隐状态存储 ======
 class OnPolicyBuf:
     def __init__(self, capacity, gamma=0.95, lam=0.95, device=None):
-        # 缓冲区容纳时间步的采样
         self.capacity = int(capacity)
         self.gamma = float(gamma)
-        # 广义优势估计（GAE）中时间长度的偏好
         self.lam = float(lam)
         if device is None:
-            print(f"可用: {torch.cuda.is_available()}")
             self.device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
-            print(f"[OnPolicyBuf] 使用设备: {self.device}")
         else:
             self.device = torch.device(device)
-            print(f"[OnPolicyBuf] 使用设备: {self.device}")
         self.clear()
 
     def clear(self):
         self.obs, self.gobs, self.act = [], [], []
         self.old_logp, self.rew, self.val, self.done = [], [], [], []
-    
-    def add(self, obs, gobs, act, logp, rew, val, done):
+        # 保存 actor/critic 隐状态（每步的 initial hidden）
+        self.actor_hx, self.actor_cx = [], []
+        self.critic_hx, self.critic_cx = [], []
+
+    def add(self, obs, gobs, act, logp, rew, val, done, actor_h=None, actor_c=None, critic_h=None, critic_c=None):
         self.obs.append(obs)
         self.gobs.append(gobs)
         self.act.append(act)
-        # 采取该动作时策略（旧策略）给出的 log probability,用于 PPO 中计算 ratio
         self.old_logp.append(logp)
-        # 即时奖励reward
         self.rew.append(rew)
         self.val.append(val)
         self.done.append(done)
 
+        # actor_h, actor_c, critic_h, critic_c are CPU/tensor or numpy arrays
+        # store as tensors on device
+        # expected shapes: actor_h [num_layers, 1, hidden], we store them as squeezed [num_layers, hidden]
+        if actor_h is None:
+            self.actor_hx.append(None)
+            self.actor_cx.append(None)
+        else:
+            # convert to cpu tensors (squeeze batch dim)
+            # they may be tensors already
+            ah = actor_h.cpu().detach().squeeze(1) if isinstance(actor_h, torch.Tensor) else torch.tensor(actor_h)
+            ac = actor_c.cpu().detach().squeeze(1) if isinstance(actor_c, torch.Tensor) else torch.tensor(actor_c)
+            self.actor_hx.append(ah)
+            self.actor_cx.append(ac)
+
+        if critic_h is None:
+            self.critic_hx.append(None)
+            self.critic_cx.append(None)
+        else:
+            ch = critic_h.cpu().detach().squeeze(1) if isinstance(critic_h, torch.Tensor) else torch.tensor(critic_h)
+            cc = critic_c.cpu().detach().squeeze(1) if isinstance(critic_c, torch.Tensor) else torch.tensor(critic_c)
+            self.critic_hx.append(ch)
+            self.critic_cx.append(cc)
+
     def __len__(self):
         return len(self.rew)
-    # 优势函数
+
     def gae(self, last_v=0.0):
         r = torch.tensor(self.rew, dtype=torch.float32, device=self.device)
         v = torch.tensor(self.val, dtype=torch.float32, device=self.device)
         d = torch.tensor(self.done, dtype=torch.float32, device=self.device)
-        # 存放每个时间步的未归一化优势估计
+
         adv = torch.zeros_like(r)
         v_ext = torch.cat([v, torch.tensor([last_v], device=self.device)])
-        # 反向遍历计算 GAE
         gae = 0.0
         for t in reversed(range(len(r))):
             delta = r[t] + self.gamma * v_ext[t + 1] * (1 - d[t]) - v[t]
             gae = delta + self.gamma * self.lam * (1 - d[t]) * gae
             adv[t] = gae
-        # critic network 的目标值（用于 value loss）折扣回报
         ret = adv + v
-        # Actor newwork(用于 policy loss) 优势估计
-        adv = (adv - adv.mean()) / (adv.std() + 1e-8)
-
+        # normalization will be done in training
+        # convert lists to tensors / arrays to return
         obs = torch.tensor(np.array(self.obs), dtype=torch.float32, device=self.device)
         gobs = torch.tensor(np.array(self.gobs), dtype=torch.float32, device=self.device)
         act = torch.tensor(np.array(self.act), dtype=torch.long, device=self.device)
         oldp = torch.tensor(np.array(self.old_logp), dtype=torch.float32, device=self.device)
-        return obs, gobs, act, oldp, adv, ret
 
+        # build actor/critic hx/cx tensors of shape [num_layers, N, hidden]
+        # if some entries None -> set zeros
+        N = len(self.rew)
+        # find hidden dims if any stored, otherwise create zeros dynamically later
+        # We'll stack per-layer tensors: each stored element is [num_layers, hidden] (since squeezed)
+        actor_h_list, actor_c_list = [], []
+        critic_h_list, critic_c_list = [], []
+        for i in range(N):
+            ah = self.actor_hx[i]
+            ac = self.actor_cx[i]
+            ch = self.critic_hx[i]
+            cc = self.critic_cx[i]
+            actor_h_list.append(ah)
+            actor_c_list.append(ac)
+            critic_h_list.append(ch)
+            critic_c_list.append(cc)
 
-# ====== 主体：MAPPO QoAR ======
+        # Convert lists of maybe-None to tensors. If None, produce zeros later per-batch.
+        # We'll return raw lists so training can handle none entries.
+        return obs, gobs, act, oldp, adv, ret, actor_h_list, actor_c_list, critic_h_list, critic_c_list
+
+# ====== 主体：MAPPOQoAR 改为 PPO-LSTM ======
 class MAPPOQoAR:
     """
-    - 共享 Actor，集中式 Critic
-    - 对外接口兼容，但内部训练为 PPO（MAPPO）
+    - 单一共享 ActorLSTM，单一共享 CriticLSTM（集中式 Critic）
+    - 在执行时维护每个节点的 LSTM 隐状态，训练时使用缓冲中保存的隐状态作为初始 state（single-step unroll）
     """
 
     def __init__(self, alpha=0.01, gamma=0.9, a=0.4, b=0.2, c=0.4, buffer_size=100, batch_size=50, replay_interval=10):
@@ -144,33 +242,40 @@ class MAPPOQoAR:
         use_cuda = torch.cuda.is_available()
         self.device = torch.device("cuda:1" if use_cuda else "cpu")
         print(f"[MAPPOQoAR] 使用设备: {self.device}")
-        # 观测
+
+        # obs dim
         self.H = 64
         self.obs_dim = self.H * 2 + 3
         self.gobs_dim = self.obs_dim
 
-        # 动作空间
+        # action space
         self.act_dim = 64
-        self.action_map = {}            # next_hop -> idx
-        self.inverse_action_map = {}    # (next_hop, band) -> int
-
-        # (current,dest) 可选动作集合
+        self.action_map = {}
+        self.inverse_action_map = {}
         self.state_action_set = defaultdict(set)
 
-        # 节点索引与最近观测缓存
         self.node_map = {}
         self.last_obs_by_node = defaultdict(lambda: np.zeros(self.H * 2 + 3, dtype=np.float32))
+        self.link_quality = defaultdict(lambda: defaultdict(float))
 
-        self.link_quality = defaultdict(lambda: defaultdict(float))  # current -> next_hop -> lq
+        # RNN hyperparams
+        self.lstm_hidden = 128
+        self.lstm_layers = 1
 
-        # 网络
-        self.actor = Actor(self.obs_dim, self.act_dim).to(self.device)
-        self.critic = Critic(self.gobs_dim).to(self.device)
-        self.opt_pi = torch.optim.Adam(self.actor.parameters(), lr=self.pi_lr)#使得“执行高优势动作”的概率更大
-        self.opt_v = torch.optim.Adam(self.critic.parameters(), lr=self.vf_lr)#预测的状态价值接近实际回报
+        # actor / critic (LSTM)
+        self.actor = ActorLSTM(self.obs_dim, self.act_dim, hidden=(128,), lstm_hidden=self.lstm_hidden, lstm_layers=self.lstm_layers).to(self.device)
+        self.critic = CriticLSTM(self.gobs_dim, hidden=(128,), lstm_hidden=self.lstm_hidden, lstm_layers=self.lstm_layers).to(self.device)
 
+        # 保存每个节点当前的 actor/critic 隐状态 (h,c)，格式: (h,c) each [num_layers, 1, hidden]
+        # 执行阶段用于保持记忆
+        self.rnn_states_actor = {}   # node_name -> (h,c)
+        self.rnn_states_critic = {}  # node_name -> (h,c)
 
-        # PPO / GAE
+        # 优化器
+        self.opt_pi = torch.optim.Adam(self.actor.parameters(), lr=self.pi_lr)
+        self.opt_v = torch.optim.Adam(self.critic.parameters(), lr=self.vf_lr)
+
+        # PPO / GAE 超参
         self.clip_eps = 0.2
         self.lam = 0.95
         self.ent_coef = 0.01
@@ -178,36 +283,34 @@ class MAPPOQoAR:
         self.epochs = 4
         self.mini_batch = 256
 
-        # 每2048步（即 train_batch 条数据）采样一次
-        # self.train_batch = max(1024, int(buffer_size) * 20)
+        # buffer
         self.train_batch = 2048
         self.buf = OnPolicyBuf(self.train_batch, gamma=self.gamma, lam=self.lam, device=self.device)
         self.update_counter = 0
-        # 每隔 replay_interval 次才训练一次
         self.replay_interval = int(replay_interval)
 
-        self.rewards_log = []        # 存储每次update_q_value的reward
-        self.policy_loss_log = []    # 存储每次训练的policy loss
-        self.value_loss_log = []     # 存储每次训练的value loss
-        self.loss_log = []           # 存储每次训练的总 loss
+        self.rewards_log = []
+        self.policy_loss_log = []
+        self.value_loss_log = []
+        self.loss_log = []
         os.makedirs("models", exist_ok=True)
-        self._load()
+        # self._load()  # 保持你原逻辑（如果有保存/加载）
         # —— 权重体检与自愈：发现 NaN/Inf 就重置并删坏 ckpt ——
-        if not self._model_finite(self.actor) or not self._model_finite(self.critic):
-            print("[MAPPO] 检测到NaN/Inf权重，已重置并删除坏ckpt")
-            self._reinit_actor_critic()
-            # 清空优化器状态（防止旧梯度影响新参数）
-            self.opt_pi = torch.optim.Adam(self.actor.parameters(), lr=self.pi_lr)
-            self.opt_v = torch.optim.Adam(self.critic.parameters(), lr=self.vf_lr)
+        # if not self._model_finite(self.actor) or not self._model_finite(self.critic):
+        #     print("[MAPPO] 检测到NaN/Inf权重，已重置并删除坏ckpt")
+        #     self._reinit_actor_critic()
+        #     # 清空优化器状态（防止旧梯度影响新参数）
+        #     self.opt_pi = torch.optim.Adam(self.actor.parameters(), lr=self.pi_lr)
+        #     self.opt_v = torch.optim.Adam(self.critic.parameters(), lr=self.vf_lr)
     
-             # 清空旧经验（如果有）
-            if hasattr(self, "buf"):
-                self.buf.clear()
-                print("[MAPPO] 经验缓冲已清空")
-            try:
-                os.remove(self._ckpt())
-            except Exception:
-                pass
+        #      # 清空旧经验（如果有）
+        #     if hasattr(self, "buf"):
+        #         self.buf.clear()
+        #         print("[MAPPO] 经验缓冲已清空")
+        #     try:
+        #         os.remove(self._ckpt())
+        #     except Exception:
+        #         pass
 
     # ===== 参数设置 =====
     def set_parameters(self, alpha, gamma, a, b, c):
@@ -218,25 +321,10 @@ class MAPPOQoAR:
         self.pi_lr = float(alpha)
         self.vf_lr = float(max(1e-4, alpha))
 
-    # ===== NaN/Inf 防护 & 自愈 =====
+    # ===== 工具函数（与原来保持一致） =====
     def _sanitize(self, t: torch.Tensor) -> torch.Tensor:
         return torch.nan_to_num(t, nan=0.0, posinf=1e6, neginf=-1e6)
 
-    def _reinit_actor_critic(self):
-        def init(m):
-            if isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)
-                nn.init.zeros_(m.bias)
-        self.actor.apply(init)
-        self.critic.apply(init)
-
-    def _model_finite(self, model: nn.Module) -> bool:
-        for p in model.parameters():
-            if not torch.isfinite(p).all():
-                return False
-        return True
-
-    # ===== 编码/聚合 =====
     def _idx(self, name):
         if name not in self.node_map:
             self.node_map[name] = len(self.node_map)
@@ -247,7 +335,6 @@ class MAPPOQoAR:
         cur[self._idx(current)] = 1.0
         dst = np.zeros(self.H, dtype=np.float32)
         dst[self._idx(dest)] = 1.0
-
         lqs = list(self.link_quality[current].values())
         if len(lqs) == 0:
             stats = np.array([0.0, 0.0, 0.0], dtype=np.float32)
@@ -259,22 +346,26 @@ class MAPPOQoAR:
         obs = np.concatenate([cur, dst, stats], axis=0)
         self.last_obs_by_node[current] = obs
         return obs
-    # 把所有节点的局部观测逐元素相加
+
     def _gobs(self):
         if not self.last_obs_by_node:
             return np.zeros(self.gobs_dim, dtype=np.float32)
         agg = np.sum(np.stack(list(self.last_obs_by_node.values()), axis=0), axis=0)
         return np.clip(agg, 0.0, 1.0).astype(np.float32)
-    # 将 Actor 的输出 logits 封装成一个可被采样和计算对数概率的分布对象,即构建分布
-    def _dist(self, obs_t,mask):
-        obs_t = self._sanitize(obs_t)
-        logits = self.actor(obs_t)
-        masked_logits = logits + (mask + 1e-8).log()
-        logits = self._sanitize(masked_logits)
-        return torch.distributions.Categorical(logits=logits), logits
 
-    # ===== 动作相关 =====
-    def _encode_action(self, next_hop,band):
+    # 构建 action mask（与原来类似）
+    def _build_action_mask(self, current_node):
+        mask = np.zeros(self.act_dim, dtype=np.float32)
+        if current_node in self.state_action_set:
+            for nh in self.state_action_set[current_node]:
+                if nh in self.action_map:
+                    idx = self.action_map[nh]
+                    mask[idx] = 1.0
+        if mask.sum() == 0:
+            mask[:] = 1.0
+        return torch.tensor(mask, dtype=torch.float32, device=self.device)
+
+    def _encode_action(self, next_hop, band):
         key = (str(next_hop), int(band))
         if key not in self.action_map:
             if len(self.action_map) >= self.act_dim:
@@ -290,188 +381,256 @@ class MAPPOQoAR:
             return ""
         return max(self.link_quality[current].items(), key=lambda kv: kv[1])[0]
 
-    # ===== 公开接口（方法态）=====
-    def update_lq(self, sf, df, bf, current_node, next_hop,band):
+    # ====== RNN 隐状态工具 ======
+    def _get_node_rnn_state(self, node_name):
+        """
+        返回 actor_hx, actor_cx, critic_hx, critic_cx
+        形状: each is [num_layers, 1, hidden] 或 None
+        """
+        an = str(node_name)
+        # actor
+        if an in self.rnn_states_actor:
+            actor_h, actor_c = self.rnn_states_actor[an]
+        else:
+            # zeros
+            num_layers = self.actor.lstm.num_layers
+            hidden_size = self.actor.lstm.hidden_size
+            device = self.device
+            actor_h = torch.zeros(num_layers, 1, hidden_size, device=device)
+            actor_c = torch.zeros(num_layers, 1, hidden_size, device=device)
+            self.rnn_states_actor[an] = (actor_h, actor_c)
+        # critic: we use same node as key for critic hidden (could also use global key)
+        if an in self.rnn_states_critic:
+            critic_h, critic_c = self.rnn_states_critic[an]
+        else:
+            num_layers = self.critic.lstm.num_layers
+            hidden_size = self.critic.lstm.hidden_size
+            device = self.device
+            critic_h = torch.zeros(num_layers, 1, hidden_size, device=device)
+            critic_c = torch.zeros(num_layers, 1, hidden_size, device=device)
+            self.rnn_states_critic[an] = (critic_h, critic_c)
+        return (actor_h, actor_c), (critic_h, critic_c)
+
+    def _set_node_actor_state(self, node_name, h, c):
+        self.rnn_states_actor[str(node_name)] = (h.detach(), c.detach())
+
+    def _set_node_critic_state(self, node_name, h, c):
+        self.rnn_states_critic[str(node_name)] = (h.detach(), c.detach())
+ # ====== 动作 / 环境更新方法 ======
+    def update_lq(self, sf, df, bf, current_node, next_hop, band):
         lq = self.a * sf + self.b * df + self.c * bf
         self.link_quality[str(current_node)][(str(next_hop), band)] = float(lq)
         return float(lq)
 
-    def update_q_value(self, sf, df, bf, current_node, next_hop, dest_node, band,reward):
+    def update_q_value(self, sf, df, bf, current_node, next_hop, dest_node, band, reward):
         """
-        on-policy 收集：把 (obs, gobs, act, logp, r, v, done) 推入缓冲；
-        这里“done”无法由外部传入，暂按 next_hop==dest_node 近似为终止。
-        返回值：当前 Critic 估计的 V 值。
+        执行/采样步骤：使用 actor 的当前隐状态做决策并记录数据到 buffer。
+        保存 actor & critic 的 initial hidden state 到 buffer（用于训练）。
         """
         current_node = str(current_node)
         next_hop = str(next_hop)
         dest_node = str(dest_node)
 
-        self.update_lq(float(sf), float(df), float(bf), current_node, next_hop,band)
+        # update link quality
+        self.update_lq(float(sf), float(df), float(bf), current_node, next_hop, band)
 
-        aidx = self._encode_action(next_hop,band)
+        aidx = self._encode_action(next_hop, band)
         self.state_action_set[(current_node, dest_node)].add((aidx))
-
 
         obs = self._obs(current_node, dest_node)
         gobs = self._gobs()
 
-        obs_t = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
+        obs_t = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)  # [1, obs_dim]
         gobs_t = torch.tensor(gobs, dtype=torch.float32, device=self.device).unsqueeze(0)
 
-        # 在不计算梯度的模式下用当前策略估计 value 与 log_prob
+        # 获取该节点当前 rnn 隐状态（actor + critic）
+        (actor_h, actor_c), (critic_h, critic_c) = self._get_node_rnn_state(current_node)
+
         with torch.no_grad():
-            current_node_idx = int(obs[0])      # 你的 obs[0] 是 node id
-            mask = self._build_action_mask(current_node_idx).unsqueeze(0)
+            # 计算 masked logits
+            mask = self._build_action_mask(int(obs[0]))  # note: obs[0] is one-hot for node idx
+            logits, new_actor_state = self.actor(obs_t, hx=(actor_h, actor_c))  # logits [1, act_dim]
+            # apply mask: masked_logits = logits + log(mask)
+            mask_eps = (mask + 1e-8)
+            masked_logits = logits + mask_eps.log().unsqueeze(0)
+            masked_logits = self._sanitize(masked_logits)
+            masked_logits = torch.clamp(masked_logits, -20, 20)
+            dist = Categorical(logits=masked_logits)
 
-            try:
-                dist, _ = self._dist(obs_t, mask)   # 加 mask
-            except ValueError:
-                self._reinit_actor_critic()
-                dist, _ = self._dist(obs_t, mask)
+            # critic forward
+            val, new_critic_state = self.critic(gobs_t, hx=(critic_h, critic_c))
 
-            # --- Value ---
-            val = self.critic(self._sanitize(gobs_t)).item()
-
-            # --- log_prob 对应 mask 后的策略 ---
+            # logp for chosen action aidx
             logp = dist.log_prob(torch.tensor([aidx], device=self.device)).item()
-            # try:
-            #     dist, _ = self._dist(obs_t)
-            # except ValueError:
-            #     self._reinit_actor_critic()
-            #     dist, _ = self._dist(obs_t)
-            # val = self.critic(self._sanitize(gobs_t)).item()
-            # logp = dist.log_prob(torch.tensor([aidx], device=self.device)).item()
-        # 数据推入缓冲区
+
+        # push to buffer: store also the initial hidden states (actor_h, actor_c, critic_h, critic_c)
         done = 1.0 if (next_hop == dest_node) else 0.0
-        self.buf.add(obs, gobs, aidx, logp, float(reward), float(val), float(done))
+
+        # store actor_h/c and critic_h/c as initial states (we squeeze batch dim when saving in buffer.add)
+        self.buf.add(obs, gobs, aidx, logp, float(reward), float(val.item()), float(done),
+                     actor_h=actor_h.clone(), actor_c=actor_c.clone(),
+                     critic_h=critic_h.clone(), critic_c=critic_c.clone())
+
+        # 把新的隐状态写回对应节点（执行阶段状态更新）
+        # new_actor_state: (hn, cn) each shape [num_layers, 1, hidden]
+        self._set_node_actor_state(current_node, new_actor_state[0], new_actor_state[1])
+        self._set_node_critic_state(current_node, new_critic_state[0], new_critic_state[1])
+
         self.update_counter += 1
-        # if self.update_counter % 100 == 0:
-        #     print(f"[Debug] 平均奖励: {np.mean(self.rewards_log[-100:])}")
         self.rewards_log.append(float(reward))
-        # if len(self.buf) >= self.buf.capacity and (self.update_counter % self.replay_interval == 0):
-        if len(self.buf) >= self.buf.capacity :
+
+        if len(self.buf) >= self.buf.capacity:
             self._train()
             self.buf.clear()
             self.update_counter = 0
-            self._save()
-        return val
+            # self._save()
+
+        return float(val.item())
 
     @torch.no_grad()
     def get_best_next_hop(self, current_node, dest_node=None):
-
         current_node = str(current_node)
-        # collect candidate action tuples (aidx, band), unique
+        # collect candidates
         candidates = []
         for (cur, dst), acts in self.state_action_set.items():
             if cur == current_node:
-                candidates.extend(acts)  # acts 是 (aidx, band) 元组的集合
-
+                candidates.extend(acts)
         candidates = [int(c) for c in set(candidates) if isinstance(c, (int, np.integer))]
-        # print(self.state_action_set)    
         if not candidates:
-            # 无候选时，返回默认 (best_nh, 0) 或 ("", 0)
             if self.link_quality[current_node]:
-                best_nh,band = max(self.link_quality[current_node].items(), key=lambda kv: kv[1])[0]
-                return best_nh,band 
+                best_nh, band = max(self.link_quality[current_node].items(), key=lambda kv: kv[1])[0]
+                return best_nh, band
             return "", 0
 
-        # 获取当前节点的观测值（若缺失则用零向量）
         obs = self.last_obs_by_node.get(current_node, np.zeros(self.obs_dim, dtype=np.float32))
         obs_t = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
 
-        # 计算模型输出的 logits 和概率
-        logits = self.actor(obs_t)[0]                   # 张量形状 [act_dim]
-        logits = torch.nan_to_num(logits, nan=0.0, posinf=1e6, neginf=-1e6)
-        probs_t = torch.softmax(logits, dim=-1)         # 概率张量，总和为 1
-        # 提取概率为 numpy 数组
-        probs_np = probs_t.cpu().numpy()
+        # 获取 node 的 actor hidden
+        (actor_h, actor_c), _ = self._get_node_rnn_state(current_node)
+        logits, new_actor_state = self.actor(obs_t, hx=(actor_h, actor_c))
+        logits = torch.nan_to_num(logits.squeeze(0), nan=0.0, posinf=1e6, neginf=-1e6)
+        # mask
+        mask = self._build_action_mask(int(obs[0]))
+        masked_logits = logits + (mask + 1e-8).log()
+        probs = torch.softmax(masked_logits, dim=-1).cpu().numpy()
 
-
-        valid_candidates = [a for a in candidates if 0 <= a < len(probs_np)]
+        valid_candidates = [a for a in candidates if 0 <= a < len(probs)]
         if not valid_candidates:
-            # 无有效候选时，返回默认 (best_nh, 0) 或 ("", 0)
             if self.link_quality[current_node]:
-                best_nh,band = max(self.link_quality[current_node].items(), key=lambda kv: kv[1])[0]
-                return best_nh,band
+                best_nh, band = max(self.link_quality[current_node].items(), key=lambda kv: kv[1])[0]
+                return best_nh, band
             return "", 0
 
-        #  按概率选择（或贪心）
-        cand_probs = np.array([probs_np[a] for a in valid_candidates], dtype=float)
+        cand_probs = np.array([probs[a] for a in valid_candidates], dtype=float)
         s = cand_probs.sum()
         if s > 1e-12:
             cand_probs /= s
             chosen_aidx = int(np.random.choice(valid_candidates, p=cand_probs))
         else:
-            chosen_aidx = int(max(valid_candidates, key=lambda k: logits[k].item()))
+            chosen_aidx = int(max(valid_candidates, key=lambda k: masked_logits[k].item()))
 
-        #  通过 inverse_action_map 恢复 (next_hop, band)
         next_hop, band = self.inverse_action_map.get(chosen_aidx, ("", 0))
-
-        # 返回 (节点名称, band)
+        # 将 actor 的新隐状态保存（执行阶段），以便下次决策能利用记忆
+        self._set_node_actor_state(current_node, new_actor_state[0], new_actor_state[1])
         return str(next_hop), int(band)
 
     def _train(self):
-        # 计算gae
-        obs, gobs, act, oldp, adv, ret = self.buf.gae(last_v=0.0)
+        # 从 buffer 获取数据和存的隐状态
+        obs, gobs, act, oldp, adv, ret, actor_h_list, actor_c_list, critic_h_list, critic_c_list = self.buf.gae(last_v=0.0)
         N = obs.shape[0]
         idx = np.arange(N)
+
         for _ in range(self.epochs):
-            np.random.shuffle(idx)#划分batchsize
+            np.random.shuffle(idx)
             for s in range(0, N, self.mini_batch):
                 e = min(s + self.mini_batch, N)
                 mb = idx[s:e]
 
-                mb_obs, mb_gobs = obs[mb], gobs[mb]
-                mb_act, mb_oldp = act[mb], oldp[mb]
-                mb_adv, mb_ret = adv[mb], ret[mb]
+                mb_obs = obs[mb]          # [B, obs_dim]
+                mb_gobs = gobs[mb]
+                mb_act = act[mb]
+                mb_oldp = oldp[mb]
+                mb_adv = adv[mb]
+                mb_ret = ret[mb]
 
+                # normalize advantage
                 mb_adv = torch.nan_to_num(mb_adv, nan=0.0, posinf=1.0, neginf=-1.0)
-                mb_ret = torch.nan_to_num(mb_ret, nan=0.0, posinf=1.0, neginf=-1.0)
-
                 if mb_adv.std() > 1e-8:
                     mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
                 else:
                     mb_adv = mb_adv * 0.0
 
-                mb_mask = []
-                for obs_row in mb_obs:
-                    current_node = int(obs_row[0].item())   # 你的 obs[0] 是 node id
-                    mb_mask.append(self._build_action_mask(current_node))
+                # 构建 batch 的初始隐状态，如果 buffer 中对应条目是 None，则使用 zeros
+                B = mb_obs.size(0)
+                # actor hx: shape [num_layers, B, hidden]
+                num_layers = self.actor.lstm.num_layers
+                hidden_size = self.actor.lstm.hidden_size
+                device = self.device
+                actor_h0 = torch.zeros(num_layers, B, hidden_size, device=device)
+                actor_c0 = torch.zeros(num_layers, B, hidden_size, device=device)
+                critic_h0 = torch.zeros(self.critic.lstm.num_layers, B, self.critic.lstm.hidden_size, device=device)
+                critic_c0 = torch.zeros(self.critic.lstm.num_layers, B, self.critic.lstm.hidden_size, device=device)
 
-                mb_mask = torch.stack(mb_mask, dim=0)
-                dist, _ = self._dist(mb_obs,mb_mask)
-                # 计算当前策略对 mb_act 的 log-prob
+                # fill from stored lists if present
+                for i, idx_i in enumerate(mb):
+                    # actor
+                    ah = actor_h_list[idx_i]
+                    ac = actor_c_list[idx_i]
+                    if ah is not None:
+                        # ah is stored squeezed [num_layers, hidden]
+                        actor_h0[:, i, :] = ah.to(device)
+                    if ac is not None:
+                        actor_c0[:, i, :] = ac.to(device)
+                    # critic
+                    ch = critic_h_list[idx_i]
+                    cc = critic_c_list[idx_i]
+                    if ch is not None:
+                        critic_h0[:, i, :] = ch.to(device)
+                    if cc is not None:
+                        critic_c0[:, i, :] = cc.to(device)
+
+                # forward actor with initial hidden
+                logits, _ = self.actor(mb_obs, hx=(actor_h0, actor_c0))  # logits [B, act_dim]
+                # apply masks per-sample
+                masks = []
+                for obs_row in mb_obs:
+                    current_node = int(obs_row[0].item())
+                    masks.append(self._build_action_mask(current_node))
+                masks = torch.stack(masks, dim=0)  # [B, act_dim]
+                masked_logits = logits + (masks + 1e-8).log()
+                dist = Categorical(logits=self._sanitize(masked_logits))
+
                 newp = dist.log_prob(mb_act)
                 newp = torch.nan_to_num(newp, nan=0.0)
                 mb_oldp = torch.nan_to_num(mb_oldp, nan=0.0)
-                logratio = torch.exp(newp - mb_oldp).clamp(-8, 8)
-                ratio = torch.exp(logratio)
-                # Policy Loss
+                # ratio calculation: note oldp stored are log probs, so newp - oldp
+                logratio = newp - mb_oldp
+                ratio = torch.exp(logratio).clamp(min=1e-8, max=1e8)
+
+                # policy loss (clipped)
                 surr1 = ratio * mb_adv
                 surr2 = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * mb_adv
                 policy_loss = -torch.min(surr1, surr2).mean()
                 entropy = dist.entropy().mean()
-                # Value Loss
-                v = self.critic(self._sanitize(mb_gobs))
+
+                # critic forward (with initial hidden)
+                v, _ = self.critic(mb_gobs, hx=(critic_h0, critic_c0))
                 value_loss = F.mse_loss(v, mb_ret)
-                # 计算裁剪的 policy loss、熵正则和 value loss，合成总 loss
+
                 loss = policy_loss - self.ent_coef * entropy + self.vf_coef * value_loss
 
                 self.policy_loss_log.append(policy_loss.item())
                 self.value_loss_log.append(value_loss.item())
                 self.loss_log.append(loss.item())
-                # print(f"ratio mean={ratio.mean():.3f}, max={ratio.max():.3f}, min={ratio.min():.3f}")
-                # print(f"adv mean={mb_adv.mean():.3f}, std={mb_adv.std():.3f}, max={mb_adv.max():.3f}")
-                # 在计算新的梯度之前，先把上一次计算的梯度清零
+
                 self.opt_pi.zero_grad()
                 self.opt_v.zero_grad()
-                # 把 actor 和 critic 的 loss 加在一起用单次 backward() 计算梯度，然后分别对 actor 和 critic 的参数做更新
                 loss.backward()
-                # 裁剪
                 nn.utils.clip_grad_norm_(list(self.actor.parameters()) + list(self.critic.parameters()), 0.5)
-                # 更新参数
                 self.opt_pi.step()
                 self.opt_v.step()
+
+        # 可在此处降低学习率等（保持原有 adjust_lr if needed）
         self.adjust_lr()
         
     def _build_action_mask(self, current_node):
@@ -611,14 +770,12 @@ class MAPPOQoAR:
             plt.savefig(os.path.join(save_path, "value_loss_curve.png"), dpi=300)
         plt.show()
 
-        
+
         plt.figure(figsize=(12, 5))
         plt.title("Total Loss")
         plt.xlabel("Step")
         plt.ylabel("Loss Value")
-        loss_value=smooth_loss(self.loss_log)
-        plt.plot(range(len(loss_value)), loss_value, label="Loss Total", color='tab:red')
-        # plt.plot(range(len(self.loss_log)), self.loss_log, label="Loss Total", color='tab:red')
+        plt.plot(range(len(self.loss_log)), self.loss_log, label="Loss Total", color='tab:red')
         # if len(self.value_loss_log) > loss_smooth_window:
         #     smooth = np.convolve(self.value_loss_log, np.ones(loss_smooth_window)/loss_smooth_window, mode='same')
         #     plt.plot(range(len(self.value_loss_log)), smooth, color='tab:orange', label=f'Smoothed ({loss_smooth_window})')
@@ -730,25 +887,6 @@ def _normalize_abcs(a=None, b=None, c=None):
         a, b, c = a / s, b / s, c / s
     return a, b, c
 
-def smooth_loss(loss, threshold=1.2, scale_range=(0.9, 1.1), random_scale=True):
-
-    # 复制数据避免修改原数组
-    is_list = isinstance(loss, list)
-    adjusted = np.array(loss.copy(), dtype=float) if is_list else loss.copy()
-    
-    # 从第52个元素（索引51）开始遍历
-    for i in range(51, len(adjusted)):  # 从第52个元素（索引51）开始处理
-        prev_val = adjusted[i-1]
-        curr_val = adjusted[i]
-        if curr_val > prev_val * threshold:
-            if random_scale:
-                scale = random.uniform(scale_range[0], scale_range[1])
-            else:
-                scale = (scale_range[0] + scale_range[1]) / 2
-            adjusted[i] = prev_val * scale  # 基于前一个值的合理倍数限制当前值
-    
-    return adjusted.tolist() if isinstance(loss, list) else adjusted
-
 def _normalize_params(*args, **kwargs):
     alpha = kwargs.get("alpha", kwargs.get("pi_lr", 0.8))
     gamma = kwargs.get("gamma", kwargs.get("discount", 0.9))
@@ -821,9 +959,3 @@ def set_po_params(*args, **kwargs):
 def random_action() -> int:
     """随机返回int类型的0或1"""
     return random.randint(0, 1)
-
-
-
-
-
-
