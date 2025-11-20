@@ -626,7 +626,6 @@ RoutingProtocol::RouteOutput(Ptr<Packet> p,
                 }else{
                     newband=1;
                 }
-                
                 m_qLearning.updateQValue(sf_norm,delay_norm,bf_norm,currentNode, bestNextHopStr, dest,newband,reward, terminal); 
        
                 // 维护路由生命期
