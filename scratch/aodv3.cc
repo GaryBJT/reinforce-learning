@@ -431,7 +431,7 @@ PrintRoutingOverheadStats(Ptr<FlowMonitor> flowMonitor,
     std::cout << "路由控制包数量: " << totalRoutingPackets << "\n";
     std::cout << "路由控制字节数: " << totalRoutingBytes << " 字节\n";
     std::cout << "应用层包数量: " << totalAppPackets << "\n";
-    std::cout << "应用层字节数: " << totalAppBytes << " 字节\n";
+    std::cout << "应用层字节数: " << totalAppBytes << " 字节 \n";
 
     if (totalAppPackets > 0)
     {
