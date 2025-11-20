@@ -13,8 +13,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
-VERBOSE = os.environ.get("QOAR_VERBOSE", "0") == "1"
-# VERBOSE = 1
+from datetime import datetime
+
 
 __all__ = [
     "MAPPOQoAR",
@@ -37,11 +37,13 @@ except Exception:
 
 # ====== 小型 MLP ======
 class MLP(nn.Module):
+    # 初始化输入层和隐藏层(2)
     def __init__(self, in_dim, hidden=(128, 128), out_dim=None):
         super().__init__()
         dims = [in_dim] + list(hidden)
         self.layers = nn.ModuleList([nn.Linear(dims[i], dims[i + 1]) for i in range(len(dims) - 1)])
         self.out = nn.Linear(dims[-1], out_dim) if out_dim is not None else None
+    # 前向传播
     def forward(self, x):
         for l in self.layers:
             x = F.relu(l(x))
@@ -52,25 +54,31 @@ class MLP(nn.Module):
 class Actor(nn.Module):
     def __init__(self, obs_dim, act_dim, hidden=(128, 128)):
         super().__init__()
+        # 调用神经网络MLP
         self.net = MLP(obs_dim, hidden, act_dim)
+        # 局部观测
     def forward(self, obs):
-        logits = self.net(obs)  # [B, act_dim] 
+        logits = self.net(obs)  # [B, act_dim] 输出原始分数
         return logits
 
 
 class Critic(nn.Module):
     def __init__(self, gobs_dim, hidden=(128, 128)):
         super().__init__()
+        # 调用神经网络MLP
         self.v = MLP(gobs_dim, hidden, 1)
+        # 全局观测 
     def forward(self, gobs):
-        return self.v(gobs).squeeze(-1)  # [B] 
+        return self.v(gobs).squeeze(-1)  # [B] 去除最后一个维度
 
 
 # ====== On-policy 缓冲（GAE）======
 class OnPolicyBuf:
     def __init__(self, capacity, gamma=0.95, lam=0.95, device=None):
+        # 缓冲区容纳时间步的采样
         self.capacity = int(capacity)
         self.gamma = float(gamma)
+        # 广义优势估计（GAE）中时间长度的偏好
         self.lam = float(lam)
         if device is None:
             print(f"可用: {torch.cuda.is_available()}")
@@ -89,7 +97,9 @@ class OnPolicyBuf:
         self.obs.append(obs)
         self.gobs.append(gobs)
         self.act.append(act)
+        # 采取该动作时策略（旧策略）给出的 log probability,用于 PPO 中计算 ratio
         self.old_logp.append(logp)
+        # 即时奖励reward
         self.rew.append(rew)
         self.val.append(val)
         self.done.append(done)
@@ -101,15 +111,18 @@ class OnPolicyBuf:
         r = torch.tensor(self.rew, dtype=torch.float32, device=self.device)
         v = torch.tensor(self.val, dtype=torch.float32, device=self.device)
         d = torch.tensor(self.done, dtype=torch.float32, device=self.device)
-
+        # 存放每个时间步的未归一化优势估计
         adv = torch.zeros_like(r)
         v_ext = torch.cat([v, torch.tensor([last_v], device=self.device)])
+        # 反向遍历计算 GAE
         gae = 0.0
         for t in reversed(range(len(r))):
             delta = r[t] + self.gamma * v_ext[t + 1] * (1 - d[t]) - v[t]
             gae = delta + self.gamma * self.lam * (1 - d[t]) * gae
             adv[t] = gae
+        # critic network 的目标值（用于 value loss）折扣回报
         ret = adv + v
+        # Actor newwork(用于 policy loss) 优势估计
         adv = (adv - adv.mean()) / (adv.std() + 1e-8)
 
         obs = torch.tensor(np.array(self.obs), dtype=torch.float32, device=self.device)
@@ -126,7 +139,7 @@ class MAPPOQoAR:
     - 对外接口兼容，但内部训练为 PPO（MAPPO）
     """
 
-    def __init__(self, alpha=0.8, gamma=0.9, a=0.4, b=0.2, c=0.4, buffer_size=100, batch_size=50, replay_interval=10):
+    def __init__(self, alpha=0.01, gamma=0.9, a=0.4, b=0.2, c=0.4, buffer_size=100, batch_size=50, replay_interval=10):
         self.set_parameters(alpha, gamma, a, b, c)
         use_cuda = torch.cuda.is_available()
         self.device = torch.device("cuda:1" if use_cuda else "cpu")
@@ -153,8 +166,9 @@ class MAPPOQoAR:
         # 网络
         self.actor = Actor(self.obs_dim, self.act_dim).to(self.device)
         self.critic = Critic(self.gobs_dim).to(self.device)
-        self.opt_pi = torch.optim.Adam(self.actor.parameters(), lr=self.pi_lr)
-        self.opt_v = torch.optim.Adam(self.critic.parameters(), lr=self.vf_lr)
+        self.opt_pi = torch.optim.Adam(self.actor.parameters(), lr=self.pi_lr)#使得“执行高优势动作”的概率更大
+        self.opt_v = torch.optim.Adam(self.critic.parameters(), lr=self.vf_lr)#预测的状态价值接近实际回报
+
 
         # PPO / GAE
         self.clip_eps = 0.2
@@ -164,23 +178,32 @@ class MAPPOQoAR:
         self.epochs = 4
         self.mini_batch = 256
 
+        # 每2048步（即 train_batch 条数据）采样一次
         # self.train_batch = max(1024, int(buffer_size) * 20)
         self.train_batch = 2048
         self.buf = OnPolicyBuf(self.train_batch, gamma=self.gamma, lam=self.lam, device=self.device)
         self.update_counter = 0
+        # 每隔 replay_interval 次才训练一次
         self.replay_interval = int(replay_interval)
 
-        self.rewards_log = []        
-        self.policy_loss_log = []    
-        self.value_loss_log = [] 
-        self.loss_log=[]    
+        self.rewards_log = []        # 存储每次update_q_value的reward
+        self.policy_loss_log = []    # 存储每次训练的policy loss
+        self.value_loss_log = []     # 存储每次训练的value loss
+        self.loss_log = []           # 存储每次训练的总 loss
         os.makedirs("models", exist_ok=True)
         self._load()
         # —— 权重体检与自愈：发现 NaN/Inf 就重置并删坏 ckpt ——
         if not self._model_finite(self.actor) or not self._model_finite(self.critic):
-            if VERBOSE:
-                print("[MAPPO] 检测到NaN/Inf权重，已重置并删除坏ckpt")
+            print("[MAPPO] 检测到NaN/Inf权重，已重置并删除坏ckpt")
             self._reinit_actor_critic()
+            # 清空优化器状态（防止旧梯度影响新参数）
+            self.opt_pi = torch.optim.Adam(self.actor.parameters(), lr=self.pi_lr)
+            self.opt_v = torch.optim.Adam(self.critic.parameters(), lr=self.vf_lr)
+    
+             # 清空旧经验（如果有）
+            if hasattr(self, "buf"):
+                self.buf.clear()
+                print("[MAPPO] 经验缓冲已清空")
             try:
                 os.remove(self._ckpt())
             except Exception:
@@ -242,11 +265,12 @@ class MAPPOQoAR:
             return np.zeros(self.gobs_dim, dtype=np.float32)
         agg = np.sum(np.stack(list(self.last_obs_by_node.values()), axis=0), axis=0)
         return np.clip(agg, 0.0, 1.0).astype(np.float32)
-    #  logits 分布
-    def _dist(self, obs_t):
+    # 将 Actor 的输出 logits 封装成一个可被采样和计算对数概率的分布对象,即构建分布
+    def _dist(self, obs_t,mask):
         obs_t = self._sanitize(obs_t)
         logits = self.actor(obs_t)
-        logits = self._sanitize(logits)
+        masked_logits = logits + (mask + 1e-8).log()
+        logits = self._sanitize(masked_logits)
         return torch.distributions.Categorical(logits=logits), logits
 
     # ===== 动作相关 =====
@@ -275,6 +299,7 @@ class MAPPOQoAR:
     def update_q_value(self, sf, df, bf, current_node, next_hop, dest_node, band,reward):
         """
         on-policy 收集：把 (obs, gobs, act, logp, r, v, done) 推入缓冲；
+        这里“done”无法由外部传入，暂按 next_hop==dest_node 近似为终止。
         返回值：当前 Critic 估计的 V 值。
         """
         current_node = str(current_node)
@@ -293,20 +318,35 @@ class MAPPOQoAR:
         obs_t = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
         gobs_t = torch.tensor(gobs, dtype=torch.float32, device=self.device).unsqueeze(0)
 
+        # 在不计算梯度的模式下用当前策略估计 value 与 log_prob
         with torch.no_grad():
+            current_node_idx = int(obs[0])      # 你的 obs[0] 是 node id
+            mask = self._build_action_mask(current_node_idx).unsqueeze(0)
+
             try:
-                dist, _ = self._dist(obs_t)
+                dist, _ = self._dist(obs_t, mask)   # 加 mask
             except ValueError:
                 self._reinit_actor_critic()
-                dist, _ = self._dist(obs_t)
-            val = self.critic(self._sanitize(gobs_t)).item()
-            logp = dist.log_prob(torch.tensor([aidx], device=self.device)).item()
+                dist, _ = self._dist(obs_t, mask)
 
+            # --- Value ---
+            val = self.critic(self._sanitize(gobs_t)).item()
+
+            # --- log_prob 对应 mask 后的策略 ---
+            logp = dist.log_prob(torch.tensor([aidx], device=self.device)).item()
+            # try:
+            #     dist, _ = self._dist(obs_t)
+            # except ValueError:
+            #     self._reinit_actor_critic()
+            #     dist, _ = self._dist(obs_t)
+            # val = self.critic(self._sanitize(gobs_t)).item()
+            # logp = dist.log_prob(torch.tensor([aidx], device=self.device)).item()
+        # 数据推入缓冲区
         done = 1.0 if (next_hop == dest_node) else 0.0
         self.buf.add(obs, gobs, aidx, logp, float(reward), float(val), float(done))
         self.update_counter += 1
-        if self.update_counter % 100 == 0:
-            print(f"[Debug] 平均奖励: {np.mean(self.rewards_log[-100:])}")
+        # if self.update_counter % 100 == 0:
+        #     print(f"[Debug] 平均奖励: {np.mean(self.rewards_log[-100:])}")
         self.rewards_log.append(float(reward))
         # if len(self.buf) >= self.buf.capacity and (self.update_counter % self.replay_interval == 0):
         if len(self.buf) >= self.buf.capacity :
@@ -320,6 +360,7 @@ class MAPPOQoAR:
     def get_best_next_hop(self, current_node, dest_node=None):
 
         current_node = str(current_node)
+        # collect candidate action tuples (aidx, band), unique
         candidates = []
         for (cur, dst), acts in self.state_action_set.items():
             if cur == current_node:
@@ -328,11 +369,13 @@ class MAPPOQoAR:
         candidates = [int(c) for c in set(candidates) if isinstance(c, (int, np.integer))]
         # print(self.state_action_set)    
         if not candidates:
+            # 无候选时，返回默认 (best_nh, 0) 或 ("", 0)
             if self.link_quality[current_node]:
                 best_nh,band = max(self.link_quality[current_node].items(), key=lambda kv: kv[1])[0]
                 return best_nh,band 
             return "", 0
 
+        # 获取当前节点的观测值（若缺失则用零向量）
         obs = self.last_obs_by_node.get(current_node, np.zeros(self.obs_dim, dtype=np.float32))
         obs_t = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
 
@@ -340,6 +383,7 @@ class MAPPOQoAR:
         logits = self.actor(obs_t)[0]                   # 张量形状 [act_dim]
         logits = torch.nan_to_num(logits, nan=0.0, posinf=1e6, neginf=-1e6)
         probs_t = torch.softmax(logits, dim=-1)         # 概率张量，总和为 1
+        # 提取概率为 numpy 数组
         probs_np = probs_t.cpu().numpy()
 
 
@@ -372,7 +416,7 @@ class MAPPOQoAR:
         N = obs.shape[0]
         idx = np.arange(N)
         for _ in range(self.epochs):
-            np.random.shuffle(idx)
+            np.random.shuffle(idx)#划分batchsize
             for s in range(0, N, self.mini_batch):
                 e = min(s + self.mini_batch, N)
                 mb = idx[s:e]
@@ -389,39 +433,68 @@ class MAPPOQoAR:
                 else:
                     mb_adv = mb_adv * 0.0
 
-                dist, _ = self._dist(mb_obs)
+                mb_mask = []
+                for obs_row in mb_obs:
+                    current_node = int(obs_row[0].item())   # 你的 obs[0] 是 node id
+                    mb_mask.append(self._build_action_mask(current_node))
+
+                mb_mask = torch.stack(mb_mask, dim=0)
+                dist, _ = self._dist(mb_obs,mb_mask)
+                # 计算当前策略对 mb_act 的 log-prob
                 newp = dist.log_prob(mb_act)
                 newp = torch.nan_to_num(newp, nan=0.0)
                 mb_oldp = torch.nan_to_num(mb_oldp, nan=0.0)
-
-                ratio = torch.exp(newp - mb_oldp).clamp(-10, 10)
-                ratio = torch.exp(ratio)
+                logratio = torch.exp(newp - mb_oldp).clamp(-8, 8)
+                ratio = torch.exp(logratio)
+                # Policy Loss
                 surr1 = ratio * mb_adv
                 surr2 = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * mb_adv
-
                 policy_loss = -torch.min(surr1, surr2).mean()
                 entropy = dist.entropy().mean()
-
+                # Value Loss
                 v = self.critic(self._sanitize(mb_gobs))
                 value_loss = F.mse_loss(v, mb_ret)
-
+                # 计算裁剪的 policy loss、熵正则和 value loss，合成总 loss
                 loss = policy_loss - self.ent_coef * entropy + self.vf_coef * value_loss
 
                 self.policy_loss_log.append(policy_loss.item())
                 self.value_loss_log.append(value_loss.item())
                 self.loss_log.append(loss.item())
-
+                # print(f"ratio mean={ratio.mean():.3f}, max={ratio.max():.3f}, min={ratio.min():.3f}")
+                # print(f"adv mean={mb_adv.mean():.3f}, std={mb_adv.std():.3f}, max={mb_adv.max():.3f}")
+                # 在计算新的梯度之前，先把上一次计算的梯度清零
                 self.opt_pi.zero_grad()
                 self.opt_v.zero_grad()
+                # 把 actor 和 critic 的 loss 加在一起用单次 backward() 计算梯度，然后分别对 actor 和 critic 的参数做更新
                 loss.backward()
                 # 裁剪
                 nn.utils.clip_grad_norm_(list(self.actor.parameters()) + list(self.critic.parameters()), 0.5)
                 # 更新参数
                 self.opt_pi.step()
                 self.opt_v.step()
+        self.adjust_lr()
+        
+    def _build_action_mask(self, current_node):
+        """
+        返回 shape = (act_dim,) 的 0/1 掩码
+        1 = 可选动作
+        0 = 不可选动作
+        """
+        mask = np.zeros(self.act_dim, dtype=np.float32)
 
-        
-        
+        # 获取当前节点的合法候选
+        if current_node in self.state_action_set:
+            for nh in self.state_action_set[current_node]:
+                if nh in self.action_map:
+                    idx = self.action_map[nh]
+                    mask[idx] = 1.0
+
+        # 若无候选，全部给 1（避免训练中断）
+        if mask.sum() == 0:
+            mask[:] = 1.0
+
+        return torch.tensor(mask, device=self.device)
+  
     # ===== 模型存储 =====
     def _ckpt(self):
         return "models/qoar_mappo.pth"
@@ -485,24 +558,31 @@ class MAPPOQoAR:
         smooth_window=1000
         # print(self.policy_loss_log)
         # print(self.value_loss_log)
-        print(f"[MAPPOQoAR] 绘制训练曲线，数据点数：奖励 {len(self.rewards_log)}，策略损失 {len(self.policy_loss_log)}，值损失 {len(self.value_loss_log)}, 总损失 {len(self.loss_log)}")
+        # print(self.loss_log)
+        # print(f"[MAPPOQoAR] 绘制训练曲线，数据点数：奖励 {len(self.rewards_log)}，策略损失 {len(self.policy_loss_log)}，值损失 {len(self.value_loss_log)}, 总损失 {len(self.loss_log)}")
         plt.figure(figsize=(12, 5))
         # --- Reward 曲线 ---
-        # plt.subplot(1, 3, 1)
         plt.title("Reward Curve")
         plt.xlabel("Step")
         plt.ylabel("Reward")
         plt.plot(self.rewards_log, color='tab:blue', alpha=0.3, label='Raw Reward')  # 原始奖励，透明显示
         if len(self.rewards_log) > smooth_window:
-            smooth = np.convolve(self.rewards_log, np.ones(smooth_window)/smooth_window, mode='valid')
-            plt.plot(range(smooth_window-1, len(self.rewards_log)), smooth, color='tab:orange', label=f'Smoothed ({smooth_window})')
+            smooth = np.convolve(self.rewards_log, np.ones(smooth_window)/smooth_window, mode='same')
+            valid_len = len(self.rewards_log) - smooth_window // 2
+            smooth = smooth[:valid_len]
+            plt.plot(range(valid_len), smooth, color='tab:orange', label=f'Smoothed ({smooth_window})')
+        
         plt.legend()
         plt.grid(True, linestyle='--', alpha=0.7)
         if save_path:
-            plt.savefig(os.path.join(save_path, "reward_curve.png"), dpi=300)
+            # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")  # 生成时间戳
+            # filename = f"reward_curve_{timestamp}.png"
+            filename = "reward_curve.png"
+            plt.savefig(os.path.join(save_path, filename), dpi=300)
         plt.show()
 
         # --- Loss 曲线 ---
+        loss_smooth_window=100
         plt.figure(figsize=(12, 5))
         plt.title("Policy Loss")
         plt.xlabel("Step")
@@ -531,6 +611,7 @@ class MAPPOQoAR:
             plt.savefig(os.path.join(save_path, "value_loss_curve.png"), dpi=300)
         plt.show()
 
+
         plt.figure(figsize=(12, 5))
         plt.title("Total Loss")
         plt.xlabel("Step")
@@ -542,8 +623,21 @@ class MAPPOQoAR:
         plt.legend()
         plt.grid(True, linestyle='--', alpha=0.8)
         if save_path:
-            plt.savefig(os.path.join(save_path, "total_loss_curve.png"), dpi=300)
+            # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")  # 生成时间戳
+            # filename = f"total_loss_curve_{timestamp}.png"
+            filename = "total_loss_curve.png"
+            plt.savefig(os.path.join(save_path, filename), dpi=300)
         plt.show()
+
+    def adjust_lr(self):
+        decay_rate = 0.95   # 每次仿真学习率乘以 0.95
+        new_lr = self.pi_lr * decay_rate 
+        self.pi_lr = max(1e-4,new_lr)
+        self.vf_lr = max(1e-4, new_lr)
+        for pg in self.opt_pi.param_groups:
+            pg["lr"] = self.pi_lr
+        for pg in self.opt_v.param_groups:
+            pg["lr"] = self.vf_lr
 
 
 # ===== 全局单例（保持原名与函数）=====
@@ -661,8 +755,8 @@ def _normalize_params(*args, **kwargs):
         if len(args) >= 3: a = args[2]
         if len(args) >= 4: b = args[3]
         if len(args) >= 5: c = args[4]
-
     a, b, c = _normalize_abcs(a, b, c)
+    
     try:
         alpha = float(alpha)
     except Exception:
@@ -680,13 +774,13 @@ def _apply_params(alpha, gamma, a, b, c):
             pg["lr"] = qlearning.pi_lr
         for pg in qlearning.opt_v.param_groups:
             pg["lr"] = qlearning.vf_lr
-        if VERBOSE:
-            print(f"[QoAR] params: alpha={alpha}, gamma={gamma}, a={a}, b={b}, c={c}")
+        # print(f"[QoAR] params: alpha={alpha}, gamma={gamma}, a={a}, b={b}, c={c}")
         return True
     except Exception as e:
-        if VERBOSE:
-            print(f"[QoAR] set params failed: {e}")
+        print(f"[QoAR] set params failed: {e}")
         return False
+    
+
 
 def set_qlearning_params(*args, **kwargs):
     alpha, gamma, a, b, c = _normalize_params(*args, **kwargs)
@@ -706,3 +800,4 @@ def set_po_params(*args, **kwargs):
 def random_action() -> int:
     """随机返回int类型的0或1"""
     return random.randint(0, 1)
+
