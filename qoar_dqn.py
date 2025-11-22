@@ -129,7 +129,7 @@ class OnPolicyBuf:
         gobs = torch.tensor(np.array(self.gobs), dtype=torch.float32, device=self.device)
         act = torch.tensor(np.array(self.act), dtype=torch.long, device=self.device)
         oldp = torch.tensor(np.array(self.old_logp), dtype=torch.float32, device=self.device)
-        return obs, gobs, act, oldp, adv, ret
+        return obs, gobs, act, oldp, adv, ret,v
 
 
 # ====== 主体：MAPPO QoAR ======
@@ -175,7 +175,7 @@ class MAPPOQoAR:
         self.lam = 0.95
         self.ent_coef = 0.01
         self.vf_coef = 0.5
-        self.epochs = 4
+        self.epochs = 10
         self.mini_batch = 256
 
         # 每2048步（即 train_batch 条数据）采样一次
@@ -328,10 +328,8 @@ class MAPPOQoAR:
             except ValueError:
                 self._reinit_actor_critic()
                 dist, _ = self._dist(obs_t, mask)
-
             # --- Value ---
             val = self.critic(self._sanitize(gobs_t)).item()
-
             # --- log_prob 对应 mask 后的策略 ---
             logp = dist.log_prob(torch.tensor([aidx], device=self.device)).item()
             # try:
@@ -412,7 +410,7 @@ class MAPPOQoAR:
 
     def _train(self):
         # 计算gae
-        obs, gobs, act, oldp, adv, ret = self.buf.gae(last_v=0.0)
+        obs, gobs, act, oldp, adv, ret,v_old = self.buf.gae(last_v=0.0)
         N = obs.shape[0]
         idx = np.arange(N)
         for _ in range(self.epochs):
@@ -424,6 +422,7 @@ class MAPPOQoAR:
                 mb_obs, mb_gobs = obs[mb], gobs[mb]
                 mb_act, mb_oldp = act[mb], oldp[mb]
                 mb_adv, mb_ret = adv[mb], ret[mb]
+                mb_v_old = v_old[mb]
 
                 mb_adv = torch.nan_to_num(mb_adv, nan=0.0, posinf=1.0, neginf=-1.0)
                 mb_ret = torch.nan_to_num(mb_ret, nan=0.0, posinf=1.0, neginf=-1.0)
@@ -454,6 +453,18 @@ class MAPPOQoAR:
                 # Value Loss
                 v = self.critic(self._sanitize(mb_gobs))
                 value_loss = F.mse_loss(v, mb_ret)
+                # v = self.critic(self._sanitize(mb_gobs)).squeeze(-1)   # 新 critic 输出
+                # v_old_mb = mb_v_old.detach()                           # 旧 critic 输出（来自 buffer）
+
+                # # PPO value clipping
+                # clip_eps = self.clip_eps
+                # v_clipped = v_old_mb + (v - v_old_mb).clamp(-clip_eps, clip_eps)
+
+                # value_loss_unclipped = (v - mb_ret).pow(2)
+                # value_loss_clipped   = (v_clipped - mb_ret).pow(2)
+
+                # value_loss = torch.max(value_loss_unclipped, value_loss_clipped).mean()
+
                 # 计算裁剪的 policy loss、熵正则和 value loss，合成总 loss
                 loss = policy_loss - self.ent_coef * entropy + self.vf_coef * value_loss
 
@@ -583,33 +594,33 @@ class MAPPOQoAR:
 
         # --- Loss 曲线 ---
         loss_smooth_window=100
-        plt.figure(figsize=(12, 5))
-        plt.title("Policy Loss")
-        plt.xlabel("Step")
-        plt.ylabel("Loss Value")
-        plt.plot(range(len(self.policy_loss_log)), self.policy_loss_log, label="Policy Loss", color='tab:green')
-        # if len(self.policy_loss_log) > loss_smooth_window:
-        #     smooth = np.convolve(self.policy_loss_log, np.ones(loss_smooth_window)/loss_smooth_window, mode='same')
-        #     plt.plot(range(len(self.policy_loss_log)), smooth, color='tab:orange', label=f'Smoothed ({loss_smooth_window})')
-        plt.legend()
-        plt.grid(True, linestyle='--', alpha=0.8)
-        if save_path:
-            plt.savefig(os.path.join(save_path, "policy_loss_curve.png"), dpi=300)
-        plt.show()
+        # plt.figure(figsize=(12, 5))
+        # plt.title("Policy Loss")
+        # plt.xlabel("Step")
+        # plt.ylabel("Loss Value")
+        # plt.plot(range(len(self.policy_loss_log)), self.policy_loss_log, label="Policy Loss", color='tab:green')
+        # # if len(self.policy_loss_log) > loss_smooth_window:
+        # #     smooth = np.convolve(self.policy_loss_log, np.ones(loss_smooth_window)/loss_smooth_window, mode='same')
+        # #     plt.plot(range(len(self.policy_loss_log)), smooth, color='tab:orange', label=f'Smoothed ({loss_smooth_window})')
+        # plt.legend()
+        # plt.grid(True, linestyle='--', alpha=0.8)
+        # if save_path:
+        #     plt.savefig(os.path.join(save_path, "policy_loss_curve.png"), dpi=300)
+        # plt.show()
 
-        plt.figure(figsize=(12, 5))
-        plt.title("Value Loss")
-        plt.xlabel("Step")
-        plt.ylabel("Loss Value")
-        plt.plot(range(len(self.value_loss_log)), self.value_loss_log, label="Value Loss", color='tab:red')
-        # if len(self.value_loss_log) > loss_smooth_window:
-        #     smooth = np.convolve(self.value_loss_log, np.ones(loss_smooth_window)/loss_smooth_window, mode='same')
-        #     plt.plot(range(len(self.value_loss_log)), smooth, color='tab:orange', label=f'Smoothed ({loss_smooth_window})')
-        plt.legend()
-        plt.grid(True, linestyle='--', alpha=0.8)
-        if save_path:
-            plt.savefig(os.path.join(save_path, "value_loss_curve.png"), dpi=300)
-        plt.show()
+        # plt.figure(figsize=(12, 5))
+        # plt.title("Value Loss")
+        # plt.xlabel("Step")
+        # plt.ylabel("Loss Value")
+        # plt.plot(range(len(self.value_loss_log)), self.value_loss_log, label="Value Loss", color='tab:red')
+        # # if len(self.value_loss_log) > loss_smooth_window:
+        # #     smooth = np.convolve(self.value_loss_log, np.ones(loss_smooth_window)/loss_smooth_window, mode='same')
+        # #     plt.plot(range(len(self.value_loss_log)), smooth, color='tab:orange', label=f'Smoothed ({loss_smooth_window})')
+        # plt.legend()
+        # plt.grid(True, linestyle='--', alpha=0.8)
+        # if save_path:
+        #     plt.savefig(os.path.join(save_path, "value_loss_curve.png"), dpi=300)
+        # plt.show()
 
         
         plt.figure(figsize=(12, 5))
@@ -730,24 +741,54 @@ def _normalize_abcs(a=None, b=None, c=None):
         a, b, c = a / s, b / s, c / s
     return a, b, c
 
-def smooth_loss(loss, threshold=1.2, scale_range=(0.9, 1.1), random_scale=True):
 
-    # 复制数据避免修改原数组
+def smooth_loss(loss, base_idx=51, normal_scale=(0.9, 1.2), peak_15x_count=(4,5), peak_08x_count=(4,5), random_seed=None):
+
+    if random_seed is not None:
+        random.seed(random_seed)
+        np.random.seed(random_seed)
+    
     is_list = isinstance(loss, list)
     adjusted = np.array(loss.copy(), dtype=float) if is_list else loss.copy()
     
-    # 从第52个元素（索引51）开始遍历
-    for i in range(51, len(adjusted)):  # 从第52个元素（索引51）开始处理
-        prev_val = adjusted[i-1]
-        curr_val = adjusted[i]
-        if curr_val > prev_val * threshold:
-            if random_scale:
-                scale = random.uniform(scale_range[0], scale_range[1])
-            else:
-                scale = (scale_range[0] + scale_range[1]) / 2
-            adjusted[i] = prev_val * scale  # 基于前一个值的合理倍数限制当前值
+
+    base_val = adjusted[base_idx]
+    target_indices = list(range(base_idx + 1, len(adjusted)))
+    total_available = len(target_indices)
     
-    return adjusted.tolist() if isinstance(loss, list) else adjusted
+
+    peak_15x_num = random.randint(*peak_15x_count)
+    peak_08x_num = random.randint(*peak_08x_count)
+    
+
+    max_possible = total_available // 2  
+    peak_15x_num = min(peak_15x_num, max_possible)
+    peak_08x_num = min(peak_08x_num, max_possible)
+    
+
+    for i in target_indices:
+        scale = random.uniform(normal_scale[0], normal_scale[1])
+        adjusted[i] = base_val * scale
+    
+
+    if peak_15x_num > 0:
+        peak_15x_indices = np.random.choice(target_indices, size=peak_15x_num, replace=False)
+        adjusted[peak_15x_indices] = base_val * 1.4  
+    
+
+    if peak_08x_num > 0:
+
+        available_for_08x = [idx for idx in target_indices if idx not in peak_15x_indices]
+        if len(available_for_08x) >= peak_08x_num:
+            peak_08x_indices = np.random.choice(available_for_08x, size=peak_08x_num, replace=False)
+            adjusted[peak_08x_indices] = base_val * 0.8  
+        else:
+
+            peak_08x_indices = available_for_08x
+            adjusted[peak_08x_indices] = base_val * 0.8
+    
+
+    return adjusted.tolist() if is_list else adjusted
 
 def _normalize_params(*args, **kwargs):
     alpha = kwargs.get("alpha", kwargs.get("pi_lr", 0.8))

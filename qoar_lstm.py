@@ -742,33 +742,33 @@ class MAPPOQoAR:
 
         # --- Loss 曲线 ---
         loss_smooth_window=100
-        plt.figure(figsize=(12, 5))
-        plt.title("Policy Loss")
-        plt.xlabel("Step")
-        plt.ylabel("Loss Value")
-        plt.plot(range(len(self.policy_loss_log)), self.policy_loss_log, label="Policy Loss", color='tab:green')
-        # if len(self.policy_loss_log) > loss_smooth_window:
-        #     smooth = np.convolve(self.policy_loss_log, np.ones(loss_smooth_window)/loss_smooth_window, mode='same')
-        #     plt.plot(range(len(self.policy_loss_log)), smooth, color='tab:orange', label=f'Smoothed ({loss_smooth_window})')
-        plt.legend()
-        plt.grid(True, linestyle='--', alpha=0.8)
-        if save_path:
-            plt.savefig(os.path.join(save_path, "policy_loss_curve.png"), dpi=300)
-        plt.show()
+        # plt.figure(figsize=(12, 5))
+        # plt.title("Policy Loss")
+        # plt.xlabel("Step")
+        # plt.ylabel("Loss Value")
+        # plt.plot(range(len(self.policy_loss_log)), self.policy_loss_log, label="Policy Loss", color='tab:green')
+        # # if len(self.policy_loss_log) > loss_smooth_window:
+        # #     smooth = np.convolve(self.policy_loss_log, np.ones(loss_smooth_window)/loss_smooth_window, mode='same')
+        # #     plt.plot(range(len(self.policy_loss_log)), smooth, color='tab:orange', label=f'Smoothed ({loss_smooth_window})')
+        # plt.legend()
+        # plt.grid(True, linestyle='--', alpha=0.8)
+        # if save_path:
+        #     plt.savefig(os.path.join(save_path, "policy_loss_curve.png"), dpi=300)
+        # plt.show()
 
-        plt.figure(figsize=(12, 5))
-        plt.title("Value Loss")
-        plt.xlabel("Step")
-        plt.ylabel("Loss Value")
-        plt.plot(range(len(self.value_loss_log)), self.value_loss_log, label="Value Loss", color='tab:red')
-        # if len(self.value_loss_log) > loss_smooth_window:
-        #     smooth = np.convolve(self.value_loss_log, np.ones(loss_smooth_window)/loss_smooth_window, mode='same')
-        #     plt.plot(range(len(self.value_loss_log)), smooth, color='tab:orange', label=f'Smoothed ({loss_smooth_window})')
-        plt.legend()
-        plt.grid(True, linestyle='--', alpha=0.8)
-        if save_path:
-            plt.savefig(os.path.join(save_path, "value_loss_curve.png"), dpi=300)
-        plt.show()
+        # plt.figure(figsize=(12, 5))
+        # plt.title("Value Loss")
+        # plt.xlabel("Step")
+        # plt.ylabel("Loss Value")
+        # plt.plot(range(len(self.value_loss_log)), self.value_loss_log, label="Value Loss", color='tab:red')
+        # # if len(self.value_loss_log) > loss_smooth_window:
+        # #     smooth = np.convolve(self.value_loss_log, np.ones(loss_smooth_window)/loss_smooth_window, mode='same')
+        # #     plt.plot(range(len(self.value_loss_log)), smooth, color='tab:orange', label=f'Smoothed ({loss_smooth_window})')
+        # plt.legend()
+        # plt.grid(True, linestyle='--', alpha=0.8)
+        # if save_path:
+        #     plt.savefig(os.path.join(save_path, "value_loss_curve.png"), dpi=300)
+        # plt.show()
 
 
         plt.figure(figsize=(12, 5))
