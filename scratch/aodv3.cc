@@ -860,7 +860,9 @@ main(int argc, char* argv[])
     }
     fm->SerializeToXmlFile("test.xml", false, false);
     if (totalTxPackets > 0 && totalRxPackets > 0)
-    {
+    {   
+        // std::cout<<" "<<totalRxPackets<<std::endl;
+        // std::cout<<" "<<totalTxPackets;
         double PDR = (totalRxPackets / totalTxPackets) * 100.0;
         double avgDelay = totalDelay / totalRxPackets;
         double avgJitter = totalJitter / totalRxPackets;

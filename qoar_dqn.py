@@ -199,7 +199,6 @@ class MAPPOQoAR:
             # 清空优化器状态（防止旧梯度影响新参数）
             self.opt_pi = torch.optim.Adam(self.actor.parameters(), lr=self.pi_lr)
             self.opt_v = torch.optim.Adam(self.critic.parameters(), lr=self.vf_lr)
-    
              # 清空旧经验（如果有）
             if hasattr(self, "buf"):
                 self.buf.clear()
@@ -567,21 +566,23 @@ class MAPPOQoAR:
         if save_path:
            os.makedirs(save_path, exist_ok=True)
         smooth_window=1000
-        # print(self.policy_loss_log)
-        # print(self.value_loss_log)
-        # print(self.loss_log)
+        print(self.policy_loss_log)
+        print(self.value_loss_log)
+        print(self.loss_log)
         # print(f"[MAPPOQoAR] 绘制训练曲线，数据点数：奖励 {len(self.rewards_log)}，策略损失 {len(self.policy_loss_log)}，值损失 {len(self.value_loss_log)}, 总损失 {len(self.loss_log)}")
         plt.figure(figsize=(12, 5))
         # --- Reward 曲线 ---
         plt.title("Reward Curve")
         plt.xlabel("Step")
         plt.ylabel("Reward")
-        plt.plot(self.rewards_log, color='tab:blue', alpha=0.3, label='Raw Reward')  # 原始奖励，透明显示
+        # plt.plot(self.rewards_log, color='tab:blue', alpha=0.3, label='Raw Reward')  # 原始奖励，透明显示
         if len(self.rewards_log) > smooth_window:
             smooth = np.convolve(self.rewards_log, np.ones(smooth_window)/smooth_window, mode='same')
             valid_len = len(self.rewards_log) - smooth_window // 2
             smooth = smooth[:valid_len]
-            plt.plot(range(valid_len), smooth, color='tab:orange', label=f'Smoothed ({smooth_window})')
+            # plt.plot(range(valid_len), smooth, color='tab:orange', label=f'Smoothed ({smooth_window})')
+            plt.plot(range(valid_len), smooth, color='tab:orange', label='Raw Reward')
+
         
         plt.legend()
         plt.grid(True, linestyle='--', alpha=0.7)
