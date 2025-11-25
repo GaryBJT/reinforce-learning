@@ -482,7 +482,7 @@ class MAPPOQoAR:
                 # 更新参数
                 self.opt_pi.step()
                 self.opt_v.step()
-        self.adjust_lr()
+        # self.adjust_lr()
         
     def _build_action_mask(self, current_node):
         """
@@ -566,9 +566,9 @@ class MAPPOQoAR:
         if save_path:
            os.makedirs(save_path, exist_ok=True)
         smooth_window=1000
-        print(self.policy_loss_log)
-        print(self.value_loss_log)
-        print(self.loss_log)
+        # print(self.policy_loss_log)
+        # print(self.value_loss_log)
+        # print(self.loss_log)
         # print(f"[MAPPOQoAR] 绘制训练曲线，数据点数：奖励 {len(self.rewards_log)}，策略损失 {len(self.policy_loss_log)}，值损失 {len(self.value_loss_log)}, 总损失 {len(self.loss_log)}")
         plt.figure(figsize=(12, 5))
         # --- Reward 曲线 ---
@@ -594,7 +594,7 @@ class MAPPOQoAR:
         plt.show()
 
         # --- Loss 曲线 ---
-        loss_smooth_window=100
+        # loss_smooth_window=100
         # plt.figure(figsize=(12, 5))
         # plt.title("Policy Loss")
         # plt.xlabel("Step")

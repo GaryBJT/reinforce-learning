@@ -513,7 +513,6 @@ RoutingProtocol::RouteOutput(Ptr<Packet> p,
     sockerr = Socket::ERROR_NOTERROR;
     Ptr<Ipv4Route> route;
     Ipv4Address dst = header.GetDestination();
-
     // ======== 使用 DQN（m_qLearning）建议的下一跳 ========
     const std::string currentNode = GetNodeAddressString();
 
@@ -864,7 +863,6 @@ RoutingProtocol::Forwarding(Ptr<const Packet> p,
     Ipv4Address origin = header.GetSource();
 
     m_routingTable.Purge();
-
     // ======== 使用 MAPPO（m_qLearning）建议的下一跳（DQN API: 单参） ========
     const std::string currentNode = GetNodeAddressString();
     auto[bestNextHopStr,band] = m_qLearning.getBestNextHop(currentNode); // 修正：单参
@@ -1837,7 +1835,7 @@ RoutingProtocol::RecvRequest(Ptr<Packet> p, Ipv4Address receiver, Ipv4Address sr
     const double lq = 0.5 * m_nb.GetSf(src) + 0.5 * m_nb.GetBf(src);
     m_nb.SetLq(src, lq);
 
-    // 3.5 时延（delay）：RREQ 内若带了 delay（以 Time 存），取其毫秒；否则回退本地估计
+    // 3.5 时延（delay）：RREQ 内若带了 delay（以 Time 存），取其毫秒
     Time delayIn = Simulator::Now()-rreqHeader.GetDelay();              // 注意：这是 Time 类型
     double delayMsIn = delayIn.IsZero()
                        ? static_cast<double>(m_nodeTraversalTime.GetMilliSeconds())

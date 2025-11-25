@@ -2,7 +2,6 @@
 # - NaN/Inf 防护 + 坏权重自愈（Xavier重置+删除坏ckpt）
 # - update_q_value / get_best_next_hop / update_lq 弹性少参兼容
 # - set_mappo_params / set_qlearning_params 支持缺参(含缺 c)且静默
-# - 默认静默；将环境变量 QOAR_VERBOSE=1 可开启日志
 # ppo_lstm_agent.py
 import os
 import numbers
@@ -375,7 +374,6 @@ class MAPPOQoAR:
         self.pi_lr = float(alpha)
         self.vf_lr = float(max(1e-4, alpha))
 
-    # ===== 工具函数（与原来保持一致） =====
     # ===== NaN/Inf 防护 & 自愈 =====
     def _sanitize(self, t: torch.Tensor) -> torch.Tensor:
         return torch.nan_to_num(t, nan=0.0, posinf=1e6, neginf=-1e6)
@@ -978,5 +976,5 @@ def set_po_params(*args, **kwargs):
     return set_mappo_params(*args, **kwargs)
 
 def random_action() -> int:
-    """随机返回int类型的0或1"""
+
     return random.randint(0, 1)

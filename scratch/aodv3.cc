@@ -467,38 +467,7 @@ PrintPhyInfo(const std::string& tag, Ptr<NetDevice> dev)
     NS_LOG_UNCOND("0.00s [" << tag << "] Ch=" << ch.Get() << " Width=" << wid.Get() << "MHz");
 }
 
-// Ptr<qoar::RoutingProtocol> GetQoarRouting(Ptr<Node> node)
-// {
-//     Ptr<Ipv4> ipv4 = node->GetObject<Ipv4>();
-//     if (!ipv4)
-//         return nullptr;
 
-//     Ptr<Ipv4RoutingProtocol> proto = ipv4->GetRoutingProtocol();
-//     if (!proto)
-//         return nullptr;
-
-//     // 第一层：直接是 QoAR？
-//     Ptr<qoar::RoutingProtocol> qoar = DynamicCast<qoar::RoutingProtocol>(proto);
-//     if (qoar)
-//         return qoar;
-
-//     // 第二层：组合路由（ListRouting）内部查找
-//     Ptr<Ipv4ListRouting> listRouting = DynamicCast<Ipv4ListRouting>(proto);
-//     if (listRouting)
-//     {
-//         int n = listRouting->GetNRoutingProtocols();
-//         for (int i = 0; i < n; ++i)
-//         {
-//             int16_t priority = 0;
-//             Ptr<Ipv4RoutingProtocol> subProto = listRouting->GetRoutingProtocol(i, priority);
-//             Ptr<qoar::RoutingProtocol> subQoar = DynamicCast<qoar::RoutingProtocol>(subProto);
-//             if (subQoar)
-//                 return subQoar;
-//         }
-//     }
-
-//     return nullptr;
-// }
 // -----------------------------------------------------------------------------
 // 主程序（其余逻辑保持不变）
 // -----------------------------------------------------------------------------
@@ -507,7 +476,7 @@ int
 main(int argc, char* argv[])
 {
     // 参数 ---------------------------------------------------------------
-    uint32_t nNodes = 30;
+    uint32_t nNodes = 20;
     double simTime = 100.0;
     double txPower = 16.0;
     double rxPower = -80.0;
@@ -902,7 +871,7 @@ main(int argc, char* argv[])
     std::strftime(timestamp, sizeof(timestamp), "%Y-%m-%d_%H-%M-%S", std::localtime(&now));
 
     // 构造目标文件名
-    std::string mydst = backupDir + "/qoar_mappo_" + timestamp + ".pth";
+    std::string mydst = backupDir + "/qoar_mappo_" +"node"+std::to_string(nNodes)+"_"+ timestamp + ".pth";
 
     // 打开文件
     std::ifstream in(src.c_str(), std::ios::binary);
