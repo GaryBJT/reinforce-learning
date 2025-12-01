@@ -494,7 +494,8 @@ RoutingProtocol::RouteOutput(Ptr<Packet> p,
                              const Ipv4Header& header,
                              Ptr<NetDevice> oif,
                              Socket::SocketErrno& sockerr)
-{
+{   
+
     NS_LOG_FUNCTION(this << header << (oif ? oif->GetIfIndex() : 0));
 
     if (!p)
@@ -513,6 +514,7 @@ RoutingProtocol::RouteOutput(Ptr<Packet> p,
     sockerr = Socket::ERROR_NOTERROR;
     Ptr<Ipv4Route> route;
     Ipv4Address dst = header.GetDestination();
+
     // ======== 使用 DQN（m_qLearning）建议的下一跳 ========
     const std::string currentNode = GetNodeAddressString();
 
@@ -662,6 +664,7 @@ RoutingProtocol::RouteOutput(Ptr<Packet> p,
         }
         UpdateRouteLifeTime(dst, m_activeRouteTimeout);
         UpdateRouteLifeTime(route->GetGateway(), m_activeRouteTimeout);
+
         return route;
     }
 
@@ -863,6 +866,7 @@ RoutingProtocol::Forwarding(Ptr<const Packet> p,
     Ipv4Address origin = header.GetSource();
 
     m_routingTable.Purge();
+
     // ======== 使用 MAPPO（m_qLearning）建议的下一跳（DQN API: 单参） ========
     const std::string currentNode = GetNodeAddressString();
     auto[bestNextHopStr,band] = m_qLearning.getBestNextHop(currentNode); // 修正：单参
@@ -964,7 +968,6 @@ RoutingProtocol::Forwarding(Ptr<const Packet> p,
                 if (route) {
                     route->SetDestination(dst);
                 }
-
                 // 转发
                 ucb(route, p, header);
                 return true;
@@ -974,6 +977,7 @@ RoutingProtocol::Forwarding(Ptr<const Packet> p,
         {
             // std::cout<<"MAPPO suggested " << bestNextHopStr
             //               << " is not a neighbor, fallback to traditional routing \n";
+
         }
     }
 

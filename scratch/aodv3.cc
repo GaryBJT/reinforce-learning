@@ -476,7 +476,7 @@ int
 main(int argc, char* argv[])
 {
     // 参数 ---------------------------------------------------------------
-    uint32_t nNodes = 20;
+    uint32_t nNodes = 30;
     double simTime = 100.0;
     double txPower = 16.0;
     double rxPower = -80.0;
@@ -592,8 +592,7 @@ main(int argc, char* argv[])
     NetDeviceContainer devN = wifiN.Install(phyN, macN, nodes);
 
     WifiHelper wifiAC;
-    wifiAC.SetStandard (WIFI_STANDARD_80211ac);
-    // wifiN.SetStandard(WIFI_STANDARD_80211ac);
+    wifiAC.SetStandard(WIFI_STANDARD_80211ac);
     // wifiAC.SetRemoteStationManager("ns3::ConstantRateWifiManager",
     //                            "DataMode", StringValue("VhtMcs9"),
     //                            "ControlMode", StringValue("VhtMcs0"));
@@ -609,6 +608,7 @@ main(int argc, char* argv[])
     phyAC.Set ("TxPowerLevels", UintegerValue (1));
     phyAC.Set ("RxSensitivity", DoubleValue (rxPower));
     phyAC.SetErrorRateModel ("ns3::NistErrorRateModel");
+    
 
     WifiMacHelper macAC;
     // 若无 CITR，请改为：macAC.SetType("ns3::AdhocWifiMac");

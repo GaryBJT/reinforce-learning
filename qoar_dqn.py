@@ -581,7 +581,7 @@ class MAPPOQoAR:
             valid_len = len(self.rewards_log) - smooth_window // 2
             smooth = smooth[:valid_len]
             # plt.plot(range(valid_len), smooth, color='tab:orange', label=f'Smoothed ({smooth_window})')
-            plt.plot(range(valid_len), smooth, color='tab:orange', label='Raw Reward')
+            plt.plot(range(valid_len), smooth, color='tab:orange', label='Reward')
 
         
         plt.legend()
