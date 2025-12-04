@@ -1,4 +1,4 @@
-// 多段流量+多条流
+// 多段流量+超多条流
 #include "ns3/core-module.h"
 #include "ns3/network-module.h"
 #include "ns3/mobility-module.h"
