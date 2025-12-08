@@ -54,7 +54,6 @@ class MLP(nn.Module):
 # ====== Actor / Critic with LSTM ======
 class ActorLSTM(nn.Module):
     """
-    --- REPLACED / NEW ---
     支持单步输入 [B, obs_dim] 或序列输入 [B, T, obs_dim] 并返回 logits 与新的 hidden
     """
     def __init__(self, obs_dim, act_dim, hidden=(128,), lstm_hidden=128, lstm_layers=1):
@@ -113,7 +112,6 @@ class ActorLSTM(nn.Module):
 
 class CriticLSTM(nn.Module):
     """
-    --- REPLACED / NEW ---
     支持单步或序列输入，输出相应形状 value
     """
     def __init__(self, gobs_dim, hidden=(128,), lstm_hidden=128, lstm_layers=1):
@@ -167,7 +165,6 @@ class CriticLSTM(nn.Module):
 # ====== On-policy 缓冲（GAE），增加隐状态存储 ======
 class OnPolicyBuf:
     """
-    --- REPLACED / NEW ---
     Buffer 能返回按序列组织的数据，并返回每序列的初始 hidden 列表（可能包含 None）
     """
     def __init__(self, capacity, gamma=0.95, lam=0.95, device=None):
@@ -222,7 +219,6 @@ class OnPolicyBuf:
 
     def gae(self, last_v=0.0, seq_len=16):
         """
-        --- REPLACED / NEW ---
         Compute GAE as before, then reshape returned tensors into sequences of shape [num_seq, seq_len, ...]
         Also return lists of stored initial hidden states for each sequence (may contain None).
         """
@@ -286,7 +282,6 @@ class OnPolicyBuf:
 # ====== 主体：PPO-LSTM 多智能体版（每节点实例化） ======
 class MAPPOQoAR:
     """
-    --- REPLACED / NEW ---
     序列 BPTT 版 PPO-LSTM agent (每节点一份实例化)
     ActorLSTM/CriticLSTM 支持序列输入，OnPolicyBuf 返回序列 + 初始 hidden
     """
@@ -581,7 +576,6 @@ class MAPPOQoAR:
 
     def _train(self):
         """
-        --- REPLACED / NEW ---
         使用序列 BPTT 训练：从 buf.gae() 获得 [num_seq, T, ...] 形式的数据
         """
         seq_len = self.seq_len
@@ -773,49 +767,49 @@ class MAPPOQoAR:
     def plot_training_curves(self, save_path=None):
         if save_path:
            os.makedirs(save_path, exist_ok=True)
-        smooth_window=1000
-        # print(self.policy_loss_log)
-        # print(self.value_loss_log)
-        # print(self.loss_log)
-        # print(f"[MAPPOQoAR] 绘制训练曲线，数据点数：奖励 {len(self.rewards_log)}，策略损失 {len(self.policy_loss_log)}，值损失 {len(self.value_loss_log)}, 总损失 {len(self.loss_log)}")
-        plt.figure(figsize=(12, 5))
-        # --- Reward 曲线 ---
-        plt.title("Reward Curve")
-        plt.xlabel("Step")
-        plt.ylabel("Reward")
-        plt.plot(self.rewards_log, color='tab:blue', alpha=0.3, label='Raw Reward')  # 原始奖励，透明显示
-        if len(self.rewards_log) > smooth_window:
-            smooth = np.convolve(self.rewards_log, np.ones(smooth_window)/smooth_window, mode='same')
-            valid_len = len(self.rewards_log) - smooth_window // 2
-            smooth = smooth[:valid_len]
-            plt.plot(range(valid_len), smooth, color='tab:orange', label=f'Smoothed ({smooth_window})')
+        # smooth_window=1000
+        # # print(self.policy_loss_log)
+        # # print(self.value_loss_log)
+        # # print(self.loss_log)
+        # # print(f"[MAPPOQoAR] 绘制训练曲线，数据点数：奖励 {len(self.rewards_log)}，策略损失 {len(self.policy_loss_log)}，值损失 {len(self.value_loss_log)}, 总损失 {len(self.loss_log)}")
+        # plt.figure(figsize=(12, 5))
+        # # --- Reward 曲线 ---
+        # plt.title("Reward Curve")
+        # plt.xlabel("Step")
+        # plt.ylabel("Reward")
+        # plt.plot(self.rewards_log, color='tab:blue', alpha=0.3, label='Raw Reward')  # 原始奖励，透明显示
+        # if len(self.rewards_log) > smooth_window:
+        #     smooth = np.convolve(self.rewards_log, np.ones(smooth_window)/smooth_window, mode='same')
+        #     valid_len = len(self.rewards_log) - smooth_window // 2
+        #     smooth = smooth[:valid_len]
+        #     plt.plot(range(valid_len), smooth, color='tab:orange', label=f'Smoothed ({smooth_window})')
         
-        plt.legend()
-        plt.grid(True, linestyle='--', alpha=0.7)
-        if save_path:
-            # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")  # 生成时间戳
-            # filename = f"reward_curve_{timestamp}.png"
-            filename = "reward_curve.png"
-            plt.savefig(os.path.join(save_path, filename), dpi=300)
-        plt.show()
+        # plt.legend()
+        # plt.grid(True, linestyle='--', alpha=0.7)
+        # if save_path:
+        #     # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")  # 生成时间戳
+        #     # filename = f"reward_curve_{timestamp}.png"
+        #     filename = "reward_curve.png"
+        #     plt.savefig(os.path.join(save_path, filename), dpi=300)
+        # plt.show()
 
-        # --- Loss 曲线 ---
-        plt.figure(figsize=(12, 5))
-        plt.title("Total Loss")
-        plt.xlabel("Step")
-        plt.ylabel("Loss Value")
-        plt.plot(range(len(self.loss_log)), self.loss_log, label="Loss Total", color='tab:red')
-        # if len(self.value_loss_log) > loss_smooth_window:
-        #     smooth = np.convolve(self.value_loss_log, np.ones(loss_smooth_window)/loss_smooth_window, mode='same')
-        #     plt.plot(range(len(self.value_loss_log)), smooth, color='tab:orange', label=f'Smoothed ({loss_smooth_window})')
-        plt.legend()
-        plt.grid(True, linestyle='--', alpha=0.8)
-        if save_path:
-            # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")  # 生成时间戳
-            # filename = f"total_loss_curve_{timestamp}.png"
-            filename = "total_loss_curve.png"
-            plt.savefig(os.path.join(save_path, filename), dpi=300)
-        plt.show()
+        # # --- Loss 曲线 ---
+        # plt.figure(figsize=(12, 5))
+        # plt.title("Total Loss")
+        # plt.xlabel("Step")
+        # plt.ylabel("Loss Value")
+        # plt.plot(range(len(self.loss_log)), self.loss_log, label="Loss Total", color='tab:red')
+        # # if len(self.value_loss_log) > loss_smooth_window:
+        # #     smooth = np.convolve(self.value_loss_log, np.ones(loss_smooth_window)/loss_smooth_window, mode='same')
+        # #     plt.plot(range(len(self.value_loss_log)), smooth, color='tab:orange', label=f'Smoothed ({loss_smooth_window})')
+        # plt.legend()
+        # plt.grid(True, linestyle='--', alpha=0.8)
+        # if save_path:
+        #     # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")  # 生成时间戳
+        #     # filename = f"total_loss_curve_{timestamp}.png"
+        #     filename = "total_loss_curve.png"
+        #     plt.savefig(os.path.join(save_path, filename), dpi=300)
+        # plt.show()
 
 
 # ===== 全局单例（保持原名与函数）=====

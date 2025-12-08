@@ -1,4 +1,4 @@
-// 五条流
+// MAPPO五条流
 #include "ns3/applications-module.h"
 #include "ns3/citr-adhoc-wifi-mac.h"
 #include "ns3/config-store-module.h"
@@ -11,6 +11,7 @@
 #include "ns3/network-module.h"
 #include "ns3/qoar-module.h"
 #include "ns3/qoar-qlearning.h"
+#include "node_utils.h" 
 // #include "ns3/qoar-dqn.h"
 #include "ns3/wifi-module.h"
 // #include "ns3/aodv-module.h"
@@ -479,6 +480,7 @@ main(int argc, char* argv[])
     uint32_t nNodes = 30;
     double simTime = 100.0;
     double txPower = 16.0;
+    // double txPower = 20.0;
     double rxPower = -80.0;
     double maxSpeed = 40.0;
     // 学习率
@@ -507,7 +509,6 @@ main(int argc, char* argv[])
     cmd.AddValue("basePort", "应用端口起始", basePort);
     cmd.Parse(argc, argv);
 
-    SeedManager::SetSeed(seed);
 
     Config::SetDefault("ns3::qoar::RoutingProtocol::Alpha", DoubleValue(alpha));
     Config::SetDefault("ns3::qoar::RoutingProtocol::Gamma", DoubleValue(gamma));
@@ -522,7 +523,8 @@ main(int argc, char* argv[])
     // 节点 + 移动 -------------------------------------------------------
     NodeContainer nodes;
     nodes.Create(nNodes);
-
+    
+    SeedManager::SetSeed(seed);
     Ptr<RandomBoxPositionAllocator> positionAlloc = CreateObject<RandomBoxPositionAllocator>();
 
     auto URV = [](double mn, double mx) {

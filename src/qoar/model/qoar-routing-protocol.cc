@@ -643,8 +643,8 @@ RoutingProtocol::RouteOutput(Ptr<Packet> p,
         }
         else
         {
-        //    std::cout<<"MAPPO suggested " << bestNextHopStr
-        //                   << " is not a neighbor, fallback to traditional routing \n";
+           NS_LOG_LOGIC("MAPPO suggested " << bestNextHopStr
+                          << " is not a neighbor, fallback to traditional routing \n");
         }
     }
     // ======== 回退：传统路由查找 ========
@@ -975,8 +975,8 @@ RoutingProtocol::Forwarding(Ptr<const Packet> p,
         }
         else
         {
-            // std::cout<<"MAPPO suggested " << bestNextHopStr
-            //               << " is not a neighbor, fallback to traditional routing \n";
+            NS_LOG_LOGIC("MAPPO suggested " << bestNextHopStr
+                          << " is not a neighbor, fallback to traditional routing \n");
 
         }
     }
@@ -1064,11 +1064,11 @@ RoutingProtocol::NotifyInterfaceUp(uint32_t i)
         m_energySource = node->GetObject<BasicEnergySource>();
         if (!m_energySource) {
 
-        // std::cout<<"Node " << node->GetId() << " has no BasicEnergySource installed!";
+        NS_LOG_LOGIC("Node " << node->GetId() << " has no BasicEnergySource installed!");
         } else {
 
-        // std::cout<<"Node " << node->GetId() << " energy source initialized: "
-        //                     << m_energySource->GetRemainingEnergy() << " J";
+        NS_LOG_LOGIC("Node " << node->GetId() << " energy source initialized: "
+                            << m_energySource->GetRemainingEnergy() << " J");
     
         }
     }

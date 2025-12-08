@@ -4,6 +4,7 @@
 # 2. 反向允许需要跟踪的文件/文件夹（必须按“父文件夹→子文件夹”顺序）
 !qoar_dqn.py  # 单个文件（无需父文件夹，直接允许）
 !qoar_lstm.py
+!qoar_mappo.py
 !scratch/     # 允许 scratch 文件夹（及内部文件）
 !models/      # 允许 models 文件夹（及内部文件）
 !src/        # 允许 src 文件夹（及内部文件）
