@@ -308,7 +308,7 @@ class RlSteeringRouting : public Ipv4RoutingProtocol
         Ipv4Address gwAddr = (action == 0) ? m_addr24[nh] : m_addr5[nh];
 
         // 切换日志：只在 band 改变时打印（含当前时间）
-        // MaybeLogSwitch(me, nh, action, dst, gwAddr);
+        MaybeLogSwitch(me, nh, action, dst, gwAddr);
         if (action == 0)
         {
             route->SetOutputDevice(m_ipv4->GetNetDevice(ifp.if24));
@@ -477,8 +477,9 @@ int
 main(int argc, char* argv[])
 {
     // 参数 ---------------------------------------------------------------
-    uint32_t nNodes = 30;
+    uint32_t nNodes = 60;
     double simTime = 100.0;
+    double interval = 0.1; 
     double txPower = 16.0;
     // double txPower = 20.0;
     double rxPower = -80.0;
@@ -499,6 +500,7 @@ main(int argc, char* argv[])
     CommandLine cmd(__FILE__);
     cmd.AddValue("nNodes", "无人机节点数量", nNodes);
     cmd.AddValue("simTime", "仿真时间（秒）", simTime);
+    cmd.AddValue("interval", "数据包发送间隔（秒）", interval);
     cmd.AddValue("Alpha", "学习率", alpha);
     cmd.AddValue("Gamma", "折扣因子", gamma);
     cmd.AddValue("A", "Q值更新参数A", a);
@@ -602,6 +604,8 @@ main(int argc, char* argv[])
     wifiAC.SetRemoteStationManager ("ns3::MinstrelHtWifiManager");
 
     YansWifiChannelHelper chAC = YansWifiChannelHelper::Default ();
+    
+
     YansWifiPhyHelper     phyAC;
     phyAC.SetChannel (chAC.Create ());
     // phyAC.Set ("ChannelSettings", StringValue ("{58, 80, BAND_5GHZ, 0}"));
@@ -713,7 +717,7 @@ main(int argc, char* argv[])
     {
         UdpEchoClientHelper echoClient(dstAddr, dstPort);
         echoClient.SetAttribute("MaxPackets", UintegerValue(10000000));
-        echoClient.SetAttribute("Interval", TimeValue(Seconds(0.1)));
+        echoClient.SetAttribute("Interval", TimeValue(Seconds(interval)));
         echoClient.SetAttribute("PacketSize", UintegerValue(500));
 
         ApplicationContainer app = echoClient.Install(nodes.Get(src));
@@ -873,7 +877,9 @@ main(int argc, char* argv[])
     std::strftime(timestamp, sizeof(timestamp), "%Y-%m-%d_%H-%M-%S", std::localtime(&now));
 
     // 构造目标文件名
-    std::string mydst = backupDir + "/qoar_mappo_" +"node"+std::to_string(nNodes)+"_"+ timestamp + ".pth";
+    // std::string mydst = backupDir + "/qoar_mappo_" +"node"+std::to_string(nNodes)+"_"+ timestamp + ".pth";
+    // std::string mydst = backupDir + "/qoar_mappo_" +"speed"+std::to_string(maxSpeed)+"_"+ timestamp + ".pth";
+    std::string mydst = backupDir + "/qoar_mappo_" +"interval"+std::to_string(interval)+"_"+ timestamp + ".pth";
 
     // 打开文件
     std::ifstream in(src.c_str(), std::ios::binary);

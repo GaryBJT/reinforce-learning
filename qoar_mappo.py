@@ -582,10 +582,10 @@ class MAPPOQoAR:
             valid_len = len(self.rewards_log) - smooth_window // 2
             smooth = smooth[:valid_len]
             # plt.plot(range(valid_len), smooth, color='tab:orange', label=f'Smoothed ({smooth_window})')
-            plt.plot(range(valid_len), smooth, color='tab:orange', label='Reward')
+            plt.plot(range(valid_len), smooth, color='tab:orange')
 
         
-        plt.legend()
+        # plt.legend()
         plt.grid(True, linestyle='--', alpha=0.7)
         if save_path:
             # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")  # 生成时间戳
@@ -630,12 +630,12 @@ class MAPPOQoAR:
         plt.xlabel("Step")
         plt.ylabel("Loss Value")
         loss_value=smooth_loss(self.loss_log)
-        plt.plot(range(len(loss_value)), loss_value, label="Loss Total", color='tab:red')
+        plt.plot(range(len(loss_value)), loss_value, color='tab:red')
         # plt.plot(range(len(self.loss_log)), self.loss_log, label="Loss Total", color='tab:red')
         # if len(self.value_loss_log) > loss_smooth_window:
         #     smooth = np.convolve(self.value_loss_log, np.ones(loss_smooth_window)/loss_smooth_window, mode='same')
         #     plt.plot(range(len(self.value_loss_log)), smooth, color='tab:orange', label=f'Smoothed ({loss_smooth_window})')
-        plt.legend()
+        # plt.legend()
         plt.grid(True, linestyle='--', alpha=0.8)
         if save_path:
             # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")  # 生成时间戳

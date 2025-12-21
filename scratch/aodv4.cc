@@ -302,7 +302,7 @@ private:
     Ipv4Address gwAddr = (action == 0) ? m_addr24[nh] : m_addr5[nh];
 
     // 切换日志：只在 band 改变时打印（含当前时间）
-    // MaybeLogSwitch (me, nh, action, dst, gwAddr);
+    MaybeLogSwitch (me, nh, action, dst, gwAddr);
 
     if (action == 0)
       {
@@ -764,7 +764,7 @@ main (int argc, char *argv[])
     }
 
   // 运行 ---------------------------------------------------------------
-  Simulator::Schedule (Seconds (10.0), &PrintSimulationTime);
+  // Simulator::Schedule (Seconds (10.0), &PrintSimulationTime);
   // Simulator::Schedule (Seconds (10.0), &PrintRemainingEnergy);
   Simulator::Stop (Seconds (simTime));
   Simulator::Run ();

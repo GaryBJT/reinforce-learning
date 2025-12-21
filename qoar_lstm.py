@@ -1,4 +1,4 @@
-# MAPPO 版 QoAR（保持原 Q-learning 外部接口不变）
+# LSTM 版 QoAR（保持原 Q-learning 外部接口不变）
 # - NaN/Inf 防护 + 坏权重自愈（Xavier重置+删除坏ckpt）
 # - update_q_value / get_best_next_hop / update_lq 弹性少参兼容
 # - set_mappo_params / set_qlearning_params 支持缺参(含缺 c)且静默
