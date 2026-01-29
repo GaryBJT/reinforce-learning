@@ -260,7 +260,8 @@ class RlSteeringRouting : public Ipv4RoutingProtocol
                         uint32_t nh,
                         int newBand,
                         const Ipv4Address& dst,
-                        const Ipv4Address& gwForThisBand)
+                        const Ipv4Address& gwForThisBand,
+                        double switchdelay)
     {
         uint64_t key = KeyPair(me, nh);
 
@@ -280,7 +281,7 @@ class RlSteeringRouting : public Ipv4RoutingProtocol
 
         // 发生切换：记录并打印
         m_lastBand[key] = newBand;
-
+        switchdelay+=0.005;
         double now = Simulator::Now().GetSeconds();
 
         std::ostringstream oss;
@@ -308,7 +309,7 @@ class RlSteeringRouting : public Ipv4RoutingProtocol
         Ipv4Address gwAddr = (action == 0) ? m_addr24[nh] : m_addr5[nh];
 
         // 切换日志：只在 band 改变时打印（含当前时间）
-        MaybeLogSwitch(me, nh, action, dst, gwAddr);
+        // MaybeLogSwitch(me, nh, action, dst, gwAddr);
         if (action == 0)
         {
             route->SetOutputDevice(m_ipv4->GetNetDevice(ifp.if24));
@@ -477,12 +478,13 @@ int
 main(int argc, char* argv[])
 {
     // 参数 ---------------------------------------------------------------
-    uint32_t nNodes = 60;
+    uint32_t nNodes = 30;
     double simTime = 100.0;
     double interval = 0.1; 
     double txPower = 16.0;
     // double txPower = 20.0;
     double rxPower = -80.0;
+    double switchdelay=0.0;
     double maxSpeed = 40.0;
     // 学习率
     double alpha = 0.01;
@@ -839,7 +841,7 @@ main(int argc, char* argv[])
         // std::cout<<" "<<totalRxPackets<<std::endl;
         // std::cout<<" "<<totalTxPackets;
         double PDR = (totalRxPackets / totalTxPackets) * 100.0;
-        double avgDelay = totalDelay / totalRxPackets;
+        double avgDelay = (totalDelay+ switchdelay)  / totalRxPackets;
         double avgJitter = totalJitter / totalRxPackets;
         double totalThroughput = (totalRxBytes * 8.0) / simTime / 1024 / 1024;
         std::cout << "\n===== QOAR仿真结果（全网聚合） =====\n";
@@ -877,9 +879,9 @@ main(int argc, char* argv[])
     std::strftime(timestamp, sizeof(timestamp), "%Y-%m-%d_%H-%M-%S", std::localtime(&now));
 
     // 构造目标文件名
-    // std::string mydst = backupDir + "/qoar_mappo_" +"node"+std::to_string(nNodes)+"_"+ timestamp + ".pth";
+    std::string mydst = backupDir + "/qoar_mappo_" +"node"+std::to_string(nNodes)+"_"+ timestamp + ".pth";
     // std::string mydst = backupDir + "/qoar_mappo_" +"speed"+std::to_string(maxSpeed)+"_"+ timestamp + ".pth";
-    std::string mydst = backupDir + "/qoar_mappo_" +"interval"+std::to_string(interval)+"_"+ timestamp + ".pth";
+    // std::string mydst = backupDir + "/qoar_mappo_" +"interval"+std::to_string(interval)+"_"+ timestamp + ".pth";
 
     // 打开文件
     std::ifstream in(src.c_str(), std::ios::binary);

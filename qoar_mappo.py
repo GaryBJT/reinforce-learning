@@ -8,6 +8,7 @@
 import os
 import numbers
 import numpy as np
+import pandas as pd
 from collections import defaultdict
 import random
 import torch
@@ -571,9 +572,8 @@ class MAPPOQoAR:
         # print(self.value_loss_log)
         # print(self.loss_log)
         # print(f"[MAPPOQoAR] 绘制训练曲线，数据点数：奖励 {len(self.rewards_log)}，策略损失 {len(self.policy_loss_log)}，值损失 {len(self.value_loss_log)}, 总损失 {len(self.loss_log)}")
-        plt.figure(figsize=(12, 5))
+        plt.figure(figsize=(8, 8))
         # --- Reward 曲线 ---
-        plt.title("Reward Curve")
         plt.xlabel("Step")
         plt.ylabel("Reward")
         # plt.plot(self.rewards_log, color='tab:blue', alpha=0.3, label='Raw Reward')  # 原始奖励，透明显示
@@ -581,10 +581,16 @@ class MAPPOQoAR:
             smooth = np.convolve(self.rewards_log, np.ones(smooth_window)/smooth_window, mode='same')
             valid_len = len(self.rewards_log) - smooth_window // 2
             smooth = smooth[:valid_len]
-            # plt.plot(range(valid_len), smooth, color='tab:orange', label=f'Smoothed ({smooth_window})')
             plt.plot(range(valid_len), smooth, color='tab:orange')
 
-        
+            # 创建DataFrame保存数据
+            df = pd.DataFrame({
+                'step': range(valid_len),
+                'smooth_reward': smooth,
+            })
+            
+            # 保存为CSV
+            df.to_csv('reward_data.csv', index=False)
         # plt.legend()
         plt.grid(True, linestyle='--', alpha=0.7)
         if save_path:
@@ -625,10 +631,9 @@ class MAPPOQoAR:
         # plt.show()
 
         
-        plt.figure(figsize=(12, 5))
-        plt.title("Total Loss")
-        plt.xlabel("Step")
-        plt.ylabel("Loss Value")
+        plt.figure(figsize=(8, 8))
+        plt.xlabel("Episode")
+        plt.ylabel("Loss")
         loss_value=smooth_loss(self.loss_log)
         plt.plot(range(len(loss_value)), loss_value, color='tab:red')
         # plt.plot(range(len(self.loss_log)), self.loss_log, label="Loss Total", color='tab:red')
